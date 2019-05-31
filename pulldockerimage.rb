@@ -36,7 +36,7 @@ def ensureResponse(resp,auth)
 	loop{
 		location = resp['location'].chomp
 		locationurl = URI.parse(location)
-		https = Net::HTTP.new(locationurl.host,443)
+		https = Net::HTTP.new(locationurl.host,locationurl.port)
 		https.use_ssl = true
 		https.verify_mode = OpenSSL::SSL::VERIFY_PEER
 		https.start{
@@ -73,7 +73,7 @@ def pullDockerImage(arg,fout)
 			uri = URI.parse(parser.params['realm'])
 			basic = loggedin?(uri.host)
 			if basic
-				authhttps = Net::HTTP.new(uri.host,443)
+				authhttps = Net::HTTP.new(uri.host,uri.port)
 				authhttps.use_ssl = true
 				authhttps.verify_mode = OpenSSL::SSL::VERIFY_PEER
 				authhttps.start{
@@ -86,7 +86,7 @@ def pullDockerImage(arg,fout)
 					auth = {'Authorization' => 'Bearer '+token}
 				}
 			else
-				raise '`docker login %s` is required.'%host
+				raise '`docker login %s` is required.'%uri.host
 			end
 			resp = https.get(
 				'/v2/%s/manifests/%s'%[repository,tag],

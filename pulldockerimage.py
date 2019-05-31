@@ -87,7 +87,7 @@ def pullDockerImage(arg,fout):
                     token = json.load(resp)['token']
                     auth = {'Authorization':'Bearer '+token}
             else:
-                raise Exception('`docker login %s` is required.'%host)
+                raise Exception('`docker login %s` is required.'%realmurl.hostname)
 
             https.request('GET','/v2/%s/manifests/%s'%(repository,tag),None,dict(auth,Accept='application/vnd.docker.distribution.manifest.v2+json'))
             resp = https.getresponse()
