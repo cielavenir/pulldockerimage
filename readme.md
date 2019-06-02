@@ -10,7 +10,7 @@ eg: index.docker.io/library/ubuntu:devel > ubuntu.tar
 
 generate a docker image directly (without deploying to the client machine).
 
-`docker login` is required prior. .docker/config.json should look like this.
+`docker login` is required prior. If credsStore is not used, .docker/config.json should look like this.
 
 {
         "auths": {

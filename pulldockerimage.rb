@@ -24,6 +24,18 @@ def loggedin?(host)
 	fname = ENV['HOME']+'/.docker/config.json'
 	return nil if !File.exists?(fname)
 	jso = JSON.parse(File.read(fname))
+	if jso['credsStore']
+		cmd = 'docker-credential-'+jso['credsStore']
+		s = IO.popen([cmd,'get'],'r+b'){|io|
+			io.write host
+			io.close_write
+			io.read
+		}
+		if $? == 0
+			jso = JSON.parse(s)
+			return Base64.encode64(jso['Username']+':'+jso['Secret'])
+		end
+	end
 	jso['auths'].include?(host) ? jso['auths'][host]['auth'] : nil
 end
 
@@ -82,6 +94,9 @@ def pullDockerImage(arg,fout)
 						'%s?account=%s&scope=repository:%s:pull&service=%s'%[uri.path,account,repository,parser.params['service']],
 						'Authorization' => 'Basic '+basic
 					)
+					if resp.code.to_i == 401
+						raise 'Credential is wrong. Please relogin to %s.'%uri.host
+					end
 					token = JSON.parse(resp.body)['token']
 					auth = {'Authorization' => 'Bearer '+token}
 				}
@@ -187,7 +202,7 @@ eg: index.docker.io/library/ubuntu:devel > ubuntu.tar
 
 generate a docker image directly (without deploying to the client machine).
 
-`docker login` is required prior. .docker/config.json should look like this.
+`docker login` is required prior. If credsStore is not used, .docker/config.json should look like this.
 
 {
         "auths": {

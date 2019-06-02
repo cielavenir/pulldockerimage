@@ -10,6 +10,7 @@ import sys
 import base64
 import hashlib
 import tarfile
+import subprocess
 from contextlib import closing, contextmanager
 
 if sys.version_info[0]>=3:
@@ -34,6 +35,13 @@ def loggedin(host):
     fname = os.environ['HOME']+'/.docker/config.json'
     if os.path.exists(fname):
         jso = json.load(open(fname))
+        if 'credsStore' in jso:
+            cmd = 'docker-credential-'+jso['credsStore']
+            proc = subprocess.Popen([cmd,'get'],shell=False,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+            outs, errs = proc.communicate(host.encode('utf-8'))
+            if proc.returncode == 0:
+                jso = json.loads(outs.decode('utf-8'))
+                return base64.b64encode((jso['Username']+':'+jso['Secret']).encode('utf-8')).decode('utf-8')
         if host in jso['auths']:
             return jso['auths'][host]['auth']
 
@@ -84,6 +92,8 @@ def pullDockerImage(arg,fout):
                 with closing(httplib.HTTPSConnection(realmurl.netloc)) as authhttps:
                     authhttps.request('GET','%s?account=%s&scope=repository:%s:pull&service=%s'%(realmurl.path,account,repository,realm['service']),None,{'Authorization':'Basic '+basic})
                     resp = authhttps.getresponse()
+                    if resp.status == 401:
+                        raise Exception('Credential is wrong. Please relogin to %s.'%realmurl.hostname)
                     token = json.load(resp)['token']
                     auth = {'Authorization':'Bearer '+token}
             else:
@@ -164,7 +174,7 @@ eg: index.docker.io/library/ubuntu:devel > ubuntu.tar
 
 generate a docker image directly (without deploying to the client machine).
 
-`docker login` is required prior. .docker/config.json should look like this.
+`docker login` is required prior. If credsStore is not used, .docker/config.json should look like this.
 
 {
         "auths": {
