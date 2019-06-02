@@ -24,8 +24,14 @@ def loggedin?(host)
 	fname = ENV['HOME']+'/.docker/config.json'
 	return nil if !File.exists?(fname)
 	jso = JSON.parse(File.read(fname))
-	if jso['credsStore']
-		cmd = 'docker-credential-'+jso['credsStore']
+	credsStore = nil
+	if (jso['credHelpers']||{})[host]
+		credsStore = jso['credHelpers'][host]
+	elsif jso['credsStore']
+		credsStore = jso['credsStore']
+	end
+	if credsStore
+		cmd = 'docker-credential-'+credsStore
 		s = IO.popen([cmd,'get'],'r+b'){|io|
 			io.write host
 			io.close_write

@@ -35,8 +35,13 @@ def loggedin(host):
     fname = os.environ['HOME']+'/.docker/config.json'
     if os.path.exists(fname):
         jso = json.load(open(fname))
-        if 'credsStore' in jso:
-            cmd = 'docker-credential-'+jso['credsStore']
+        credsStore = None
+        if host in jso.get('credHelpers',{}):
+            credsStore = jso['credHelpers'][host]
+        elif 'credsStore' in jso:
+            credsStore = jso['credsStore']
+        if credsStore is not None:
+            cmd = 'docker-credential-'+credsStore
             proc = subprocess.Popen([cmd,'get'],shell=False,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
             outs, errs = proc.communicate(host.encode('utf-8'))
             if proc.returncode == 0:

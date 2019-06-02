@@ -7,7 +7,7 @@
 
 ### Credentials Store
 
-Now [credentials store](https://docs.docker.com/engine/reference/commandline/login/#credentials-store) is supported.
+Now [credentials store](https://docs.docker.com/engine/reference/commandline/login/#credentials-store) is supported in both credsStore and credHelpers manners.
 
 ### Article
 
