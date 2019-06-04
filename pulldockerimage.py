@@ -46,8 +46,10 @@ def loggedin(host):
                 proc = subprocess.Popen([cmd,'get'],shell=False,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
                 outs, errs = proc.communicate(host.encode('utf-8'))
                 if proc.returncode == 0:
+                    # docker-credential-pass always finishes successfully; need to check json
                     jso = json.loads(outs.decode('utf-8'))
-                    return base64.b64encode((jso['Username']+':'+jso['Secret']).encode('utf-8')).decode('utf-8')
+                    if jso.get('Username'):
+                        return base64.b64encode((jso['Username']+':'+jso['Secret']).encode('utf-8')).decode('utf-8')
             if host in jso.get('auths',{}):
                 return jso['auths'][host]['auth']
 
@@ -92,23 +94,28 @@ def pullDockerImage(arg,fout):
             authresp = resp.getheader('www-authenticate')
             realm = parse_keqv_list(parse_http_list(authresp[authresp.index(' ')+1:]))
             realmurl = urlparse(realm['realm'])
-            basic = loggedin(realmurl.netloc)
-            if basic:
-                account = base64.b64decode(basic).decode('utf-8').split(':')[0]
-                with closing(httplib.HTTPSConnection(realmurl.netloc)) as authhttps:
-                    authhttps.request('GET','%s?account=%s&scope=repository:%s:pull&service=%s'%(realmurl.path,account,repository,realm['service']),None,{'Authorization':'Basic '+basic})
-                    resp = authhttps.getresponse()
-                    if resp.status == 401:
-                        raise Exception('Credential is wrong. Please relogin to %s.'%realmurl.hostname)
-                    token = json.load(resp)['token']
-                    auth = {'Authorization':'Bearer '+token}
-            else:
-                raise Exception('`docker login %s` is required.'%realmurl.hostname)
+            with closing(httplib.HTTPSConnection(realmurl.netloc)) as authhttps:
+                authhttps.request('GET','%s?scope=repository:%s:pull&service=%s'%(realmurl.path,repository,realm['service']),None)
+                resp = authhttps.getresponse()
+                if resp.status == 401:
+                    resp.read()
+                    basic = loggedin(realmurl.netloc)
+                    if basic:
+                        account = base64.b64decode(basic).decode('utf-8').split(':')[0]
+                        authhttps.request('GET','%s?account=%s&scope=repository:%s:pull&service=%s'%(realmurl.path,account,repository,realm['service']),None,{'Authorization':'Basic '+basic})
+                        resp = authhttps.getresponse()
+                        if resp.status == 401:
+                            raise Exception('Credential is wrong. Please relogin to %s.'%realmurl.hostname)
+                    else:
+                        raise Exception('`docker login %s` is required.'%realmurl.hostname)
+                token = json.load(resp)['token']
+                auth = {'Authorization':'Bearer '+token}
 
             https.request('GET','/v2/%s/manifests/%s'%(repository,tag),None,dict(auth,Accept='application/vnd.docker.distribution.manifest.v2+json'))
             resp = https.getresponse()
 
         manifestv2 = json.load(resp)
+        repodigest = resp.getheader('docker-content-digest')
         with tarfile.open(mode='w|',fileobj=fout) as tar:
             https.request('GET','/v2/%s/blobs/%s'%(repository,manifestv2['config']['digest']),None,auth)
             with ensureResponse(https,auth) as resp:
@@ -121,6 +128,9 @@ def pullDockerImage(arg,fout):
                 'RepoTags' : [
                     '%s/%s:%s'%(host,repository,tag)
                 ],
+                #'RepoDigests' : [
+                #    '%s/%s@%s'%(host,repository,repodigest)
+                #],
                 'Layers' : []
             }
             layerId = ''
@@ -166,7 +176,7 @@ def pullDockerImage(arg,fout):
             manifestjsonstr = json.dumps([manifestjson])
             tar.addfile(makeTarInfo(name='manifest.json',data=manifestjsonstr),BytesIO(manifestjsonstr.encode('utf-8')))
             repositoryjsonstr = json.dumps({
-                host+'/'+repository : {tag : ''}
+                host+'/'+repository : {tag : layerId} # This tag looks like the last layerId, according to manifest.json.
             })
             tar.addfile(makeTarInfo(name='repositories',data=repositoryjsonstr),BytesIO(repositoryjsonstr.encode('utf-8')))
 
@@ -180,11 +190,12 @@ eg: index.docker.io/library/ubuntu:devel > ubuntu.tar
 
 generate a docker image directly (without deploying to the client machine).
 
-`docker login` is required prior. If credsStore is not used, .docker/config.json should look like this.
+`docker login` is required prior if authorization is required.
+If credsStore is not used, .docker/config.json should look like this.
 
 {
         "auths": {
-                "index.docker.io": {
+                "auth.docker.io": {
                         "auth": base64(username:password)
                 }
         }

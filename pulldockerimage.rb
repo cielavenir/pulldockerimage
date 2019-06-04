@@ -38,8 +38,9 @@ def loggedin?(host)
 			io.read
 		}
 		if $? == 0
+			# docker-credential-pass always finishes successfully; need to check json
 			jso = JSON.parse(s)
-			return Base64.encode64(jso['Username']+':'+jso['Secret'])
+			return Base64.encode64(jso['Username']+':'+jso['Secret']) if (jso['Username']||'').size>0
 		end
 	end
 	(jso['auths']||{}).include?(host) ? jso['auths'][host]['auth'] : nil
@@ -89,26 +90,31 @@ def pullDockerImage(arg,fout)
 		if resp.code.to_i == 401
 			parser = Mechanize::HTTP::WWWAuthenticateParser.new.parse(resp['www-authenticate'])[0]
 			uri = URI.parse(parser.params['realm'])
-			basic = loggedin?(uri.host)
-			if basic
-				authhttps = Net::HTTP.new(uri.host,uri.port)
-				authhttps.use_ssl = true
-				authhttps.verify_mode = OpenSSL::SSL::VERIFY_PEER
-				authhttps.start{
-					account = Base64.decode64(basic).split(':')[0]
-					resp = authhttps.get(
-						'%s?account=%s&scope=repository:%s:pull&service=%s'%[uri.path,account,repository,parser.params['service']],
-						'Authorization' => 'Basic '+basic
-					)
-					if resp.code.to_i == 401
-						raise 'Credential is wrong. Please relogin to %s.'%uri.host
+			authhttps = Net::HTTP.new(uri.host,uri.port)
+			authhttps.use_ssl = true
+			authhttps.verify_mode = OpenSSL::SSL::VERIFY_PEER
+			authhttps.start{
+				resp = authhttps.get(
+					'%s?scope=repository:%s:pull&service=%s'%[uri.path,repository,parser.params['service']]
+				)
+				if resp.code.to_i == 401
+					basic = loggedin?(uri.host)
+					if basic
+						account = Base64.decode64(basic).split(':')[0]
+						resp = authhttps.get(
+							'%s?account=%s&scope=repository:%s:pull&service=%s'%[uri.path,account,repository,parser.params['service']],
+							'Authorization' => 'Basic '+basic
+						)
+						if resp.code.to_i == 401
+							raise 'Credential is wrong. Please relogin to %s.'%uri.host
+						end
+					else
+						raise '`docker login %s` is required.'%uri.host
 					end
-					token = JSON.parse(resp.body)['token']
-					auth = {'Authorization' => 'Bearer '+token}
-				}
-			else
-				raise '`docker login %s` is required.'%uri.host
-			end
+				end
+				token = JSON.parse(resp.body)['token']
+				auth = {'Authorization' => 'Bearer '+token}
+			}
 			resp = https.get(
 				'/v2/%s/manifests/%s'%[repository,tag],
 				auth.merge({
@@ -118,6 +124,7 @@ def pullDockerImage(arg,fout)
 		end
 
 		manifestv2 = JSON.parse(resp.body)
+		repodigest = resp['docker-content-digest']
 		Archive::Tar::Minitar::Output.open(fout){|output|
 			tar = output.tar
 			https.request_get(
@@ -134,6 +141,9 @@ def pullDockerImage(arg,fout)
 				'RepoTags' => [
 					'%s/%s:%s'%[host,repository,tag]
 				],
+				#'RepoDigests' : [
+				#    '%s/%s@%s'%[host,repository,repodigest]
+				#],
 				'Layers' => []
 			}
 			layerId = ''
@@ -192,7 +202,7 @@ def pullDockerImage(arg,fout)
 			#File.write('repositories',
 			tar.add_file_simple('repositories',{:data=>
 				JSON.generate({
-					host+'/'+repository => {tag => ''}
+					host+'/'+repository => {tag => layerId} # This tag looks like the last layerId, according to manifest.json.
 				})
 			})
 		}
@@ -208,11 +218,12 @@ eg: index.docker.io/library/ubuntu:devel > ubuntu.tar
 
 generate a docker image directly (without deploying to the client machine).
 
-`docker login` is required prior. If credsStore is not used, .docker/config.json should look like this.
+`docker login` is required prior if authorization is required.
+If credsStore is not used, .docker/config.json should look like this.
 
 {
         "auths": {
-                "index.docker.io": {
+                "auth.docker.io": {
                         "auth": base64(username:password)
                 }
         }
