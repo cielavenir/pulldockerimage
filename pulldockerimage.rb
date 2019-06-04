@@ -42,7 +42,7 @@ def loggedin?(host)
 			return Base64.encode64(jso['Username']+':'+jso['Secret'])
 		end
 	end
-	jso['auths'].include?(host) ? jso['auths'][host]['auth'] : nil
+	(jso['auths']||{}).include?(host) ? jso['auths'][host]['auth'] : nil
 end
 
 def ensureResponse(resp,auth)

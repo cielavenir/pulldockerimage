@@ -34,21 +34,22 @@ except ImportError:
 def loggedin(host):
     fname = os.environ['HOME']+'/.docker/config.json'
     if os.path.exists(fname):
-        jso = json.load(open(fname))
-        credsStore = None
-        if host in jso.get('credHelpers',{}):
-            credsStore = jso['credHelpers'][host]
-        elif 'credsStore' in jso:
-            credsStore = jso['credsStore']
-        if credsStore is not None:
-            cmd = 'docker-credential-'+credsStore
-            proc = subprocess.Popen([cmd,'get'],shell=False,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
-            outs, errs = proc.communicate(host.encode('utf-8'))
-            if proc.returncode == 0:
-                jso = json.loads(outs.decode('utf-8'))
-                return base64.b64encode((jso['Username']+':'+jso['Secret']).encode('utf-8')).decode('utf-8')
-        if host in jso['auths']:
-            return jso['auths'][host]['auth']
+        with open(fname) as f:
+            jso = json.load(f)
+            credsStore = None
+            if host in jso.get('credHelpers',{}):
+                credsStore = jso['credHelpers'][host]
+            elif 'credsStore' in jso:
+                credsStore = jso['credsStore']
+            if credsStore is not None:
+                cmd = 'docker-credential-'+credsStore
+                proc = subprocess.Popen([cmd,'get'],shell=False,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+                outs, errs = proc.communicate(host.encode('utf-8'))
+                if proc.returncode == 0:
+                    jso = json.loads(outs.decode('utf-8'))
+                    return base64.b64encode((jso['Username']+':'+jso['Secret']).encode('utf-8')).decode('utf-8')
+            if host in jso.get('auths',{}):
+                return jso['auths'][host]['auth']
 
 def makeTarInfo(**kwargs):
     info = tarfile.TarInfo(kwargs.pop('name'))
