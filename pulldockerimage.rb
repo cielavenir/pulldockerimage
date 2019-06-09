@@ -141,8 +141,8 @@ def pullDockerImage(arg,fout)
 				'RepoTags' => [
 					'%s/%s:%s'%[host,repository,tag]
 				],
-				#'RepoDigests' : [
-				#    '%s/%s@%s'%[host,repository,repodigest]
+				#'RepoDigests' => [
+				#	'%s/%s@%s'%[host,repository,repodigest]
 				#],
 				'Layers' => []
 			}
