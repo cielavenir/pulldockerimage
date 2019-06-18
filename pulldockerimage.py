@@ -79,38 +79,56 @@ def ensureResponse(https,auth):
                 return
             resp.read()
 
+def login(wwwAuth,repository):
+    authresp = wwwAuth
+    realm = parse_keqv_list(parse_http_list(authresp[authresp.index(' ')+1:]))
+    realmurl = urlparse(realm['realm'])
+    with closing(httplib.HTTPSConnection(realmurl.netloc)) as authhttps:
+        authhttps.request('GET','%s?scope=repository:%s:pull&service=%s'%(realmurl.path,repository,realm['service']),None)
+        resp = authhttps.getresponse()
+        if resp.status == 401:
+            resp.read()
+            basic = loggedin(realmurl.netloc)
+            if basic:
+                account = base64.b64decode(basic).decode('utf-8').split(':')[0]
+                authhttps.request('GET','%s?account=%s&scope=repository:%s:pull&service=%s'%(realmurl.path,account,repository,realm['service']),None,{'Authorization':'Basic '+basic})
+                resp = authhttps.getresponse()
+                if resp.status == 401:
+                    raise Exception('Credential is wrong. Please relogin to %s.'%realmurl.hostname)
+            else:
+                raise Exception('`docker login %s` is required.'%realmurl.hostname)
+        token = json.load(resp)['token']
+        return {'Authorization':'Bearer '+token}
+
 def pullDockerImage(arg,fout):
-    repository = arg.split(':')[0]
+    tag = None
+    tagidx = arg.find(':')
+    if tagidx >= 0:
+        tag = arg[tagidx+1:]
+        arg = arg[:tagidx]
+    repository = arg
     host = repository.split('/')[0]
     repository = repository[len(host)+1:]
-    tag = arg.split(':')[1]
 
     with closing(httplib.HTTPSConnection(host)) as https:
         auth = {}
+        if tag is None:
+            https.request('GET','/v2/%s/tags/list'%repository,None,auth)
+            resp = https.getresponse()
+            if resp.status == 401:
+                resp.read()
+                auth = login(resp.getheader('www-authenticate'),repository)
+                https.request('GET','/v2/%s/tags/list'%repository,None,auth)
+                resp = https.getresponse()
+            for e in sorted(json.load(resp)['tags']):
+                fout.write((e+'\n').encode('utf-8'))
+            return 0
+
         https.request('GET','/v2/%s/manifests/%s'%(repository,tag),None,dict(auth,Accept='application/vnd.docker.distribution.manifest.v2+json'))
         resp = https.getresponse()
         if resp.status == 401:
             resp.read()
-            authresp = resp.getheader('www-authenticate')
-            realm = parse_keqv_list(parse_http_list(authresp[authresp.index(' ')+1:]))
-            realmurl = urlparse(realm['realm'])
-            with closing(httplib.HTTPSConnection(realmurl.netloc)) as authhttps:
-                authhttps.request('GET','%s?scope=repository:%s:pull&service=%s'%(realmurl.path,repository,realm['service']),None)
-                resp = authhttps.getresponse()
-                if resp.status == 401:
-                    resp.read()
-                    basic = loggedin(realmurl.netloc)
-                    if basic:
-                        account = base64.b64decode(basic).decode('utf-8').split(':')[0]
-                        authhttps.request('GET','%s?account=%s&scope=repository:%s:pull&service=%s'%(realmurl.path,account,repository,realm['service']),None,{'Authorization':'Basic '+basic})
-                        resp = authhttps.getresponse()
-                        if resp.status == 401:
-                            raise Exception('Credential is wrong. Please relogin to %s.'%realmurl.hostname)
-                    else:
-                        raise Exception('`docker login %s` is required.'%realmurl.hostname)
-                token = json.load(resp)['token']
-                auth = {'Authorization':'Bearer '+token}
-
+            auth = login(resp.getheader('www-authenticate'),repository)
             https.request('GET','/v2/%s/manifests/%s'%(repository,tag),None,dict(auth,Accept='application/vnd.docker.distribution.manifest.v2+json'))
             resp = https.getresponse()
 

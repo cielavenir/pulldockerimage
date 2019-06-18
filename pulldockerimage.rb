@@ -70,17 +70,62 @@ def ensureResponse(resp,auth)
 	}
 end
 
+def login(wwwAuth,repository)
+	parser = Mechanize::HTTP::WWWAuthenticateParser.new.parse(wwwAuth)[0]
+	uri = URI.parse(parser.params['realm'])
+	authhttps = Net::HTTP.new(uri.host,uri.port)
+	authhttps.use_ssl = true
+	authhttps.verify_mode = OpenSSL::SSL::VERIFY_PEER
+	authhttps.start{
+		resp = authhttps.get(
+			'%s?scope=repository:%s:pull&service=%s'%[uri.path,repository,parser.params['service']]
+		)
+		if resp.code.to_i == 401
+			basic = loggedin?(uri.host)
+			if basic
+				account = Base64.decode64(basic).split(':')[0]
+				resp = authhttps.get(
+					'%s?account=%s&scope=repository:%s:pull&service=%s'%[uri.path,account,repository,parser.params['service']],
+					'Authorization' => 'Basic '+basic
+				)
+				if resp.code.to_i == 401
+					raise 'Credential is wrong. Please relogin to %s.'%uri.host
+				end
+			else
+				raise '`docker login %s` is required.'%uri.host
+			end
+		end
+		token = JSON.parse(resp.body)['token']
+		return {'Authorization' => 'Bearer '+token}
+	}
+end
+
 def pullDockerImage(arg,fout)
-	repository = arg.split(':')[0]
+	tag = nil
+	tagidx = arg.index(':')
+	if tagidx
+		tag = arg[tagidx+1..-1]
+		arg = arg[0,tagidx]
+	end
+	repository = arg
 	host = repository.split('/')[0]
 	repository = repository[host.size+1..-1]
-	tag = arg.split(':')[1]
 
 	https = Net::HTTP.new(host,443)
 	https.use_ssl = true
 	https.verify_mode = OpenSSL::SSL::VERIFY_PEER
 	https.start{
 		auth = {}
+		if !tag
+			resp = https.get('/v2/%s/tags/list'%repository,auth)
+			if resp.code.to_i == 401
+				auth = login(resp['www-authenticate'],repository)
+				resp = https.get('/v2/%s/tags/list'%repository,auth)
+			end
+			fout.puts JSON.parse(resp.body)['tags'].sort
+			return 0
+		end
+
 		resp = https.get(
 			'/v2/%s/manifests/%s'%[repository,tag],
 			auth.merge({
@@ -88,33 +133,7 @@ def pullDockerImage(arg,fout)
 			})
 		)
 		if resp.code.to_i == 401
-			parser = Mechanize::HTTP::WWWAuthenticateParser.new.parse(resp['www-authenticate'])[0]
-			uri = URI.parse(parser.params['realm'])
-			authhttps = Net::HTTP.new(uri.host,uri.port)
-			authhttps.use_ssl = true
-			authhttps.verify_mode = OpenSSL::SSL::VERIFY_PEER
-			authhttps.start{
-				resp = authhttps.get(
-					'%s?scope=repository:%s:pull&service=%s'%[uri.path,repository,parser.params['service']]
-				)
-				if resp.code.to_i == 401
-					basic = loggedin?(uri.host)
-					if basic
-						account = Base64.decode64(basic).split(':')[0]
-						resp = authhttps.get(
-							'%s?account=%s&scope=repository:%s:pull&service=%s'%[uri.path,account,repository,parser.params['service']],
-							'Authorization' => 'Basic '+basic
-						)
-						if resp.code.to_i == 401
-							raise 'Credential is wrong. Please relogin to %s.'%uri.host
-						end
-					else
-						raise '`docker login %s` is required.'%uri.host
-					end
-				end
-				token = JSON.parse(resp.body)['token']
-				auth = {'Authorization' => 'Bearer '+token}
-			}
+			auth = login(resp['www-authenticate'],repository)
 			resp = https.get(
 				'/v2/%s/manifests/%s'%[repository,tag],
 				auth.merge({
