@@ -120,8 +120,11 @@ def pullDockerImage(arg,fout):
                 auth = login(resp.getheader('www-authenticate'),repository)
                 https.request('GET','/v2/%s/tags/list'%repository,None,auth)
                 resp = https.getresponse()
-            for e in sorted(json.load(resp)['tags']):
-                fout.write((e+'\n').encode('utf-8'))
+            for tag in sorted(json.load(resp)['tags']):
+                https.request('GET','/v2/%s/manifests/%s'%(repository,tag),None,dict(auth,Accept='application/vnd.docker.distribution.manifest.v1+json'))
+                resp = https.getresponse()
+                created = json.loads(json.load(resp)['history'][0]['v1Compatibility'])['created'].split('.')[0]
+                fout.write((('%s\t%s\n')%(tag,created)).encode('utf-8'))
             return 0
 
         https.request('GET','/v2/%s/manifests/%s'%(repository,tag),None,dict(auth,Accept='application/vnd.docker.distribution.manifest.v2+json'))

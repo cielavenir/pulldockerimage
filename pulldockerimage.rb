@@ -138,7 +138,17 @@ def pullDockerImage(arg,fout)
 				auth = login(resp['www-authenticate'],repository)
 				resp = https.get('/v2/%s/tags/list'%repository,auth)
 			end
-			fout.puts JSON.parse(resp.body)['tags'].sort
+			tags = JSON.parse(resp.body)['tags'].sort
+			tags.each{|tag|
+				resp = https.get(
+					'/v2/%s/manifests/%s'%[repository,tag],
+					auth.merge({
+						'Accept' => 'application/vnd.docker.distribution.manifest.v1+json'
+					})
+				)
+				created = JSON.parse(JSON.parse(resp.body)['history'][0]['v1Compatibility'])['created'].split('.')[0]
+				fout.puts "%s\t%s"%[tag,created]
+			}
 			return 0
 		end
 
