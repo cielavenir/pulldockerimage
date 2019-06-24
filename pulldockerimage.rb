@@ -6,6 +6,8 @@
 # https://raw.githubusercontent.com/moby/moby/master/contrib/download-frozen-image-v2.sh
 # https://stackoverflow.com/a/47624649
 
+$verbose = true # verbose output in listing tags
+
 require 'net/https'
 require 'json'
 require 'fileutils'
@@ -118,7 +120,10 @@ end
 
 def pullDockerImage(arg,fout)
 	tag = nil
-	tagidx = arg.index(':')
+	tagidx = arg.index('@')
+	if !tagidx
+		tagidx = arg.index(':')
+	end
 	if tagidx
 		tag = arg[tagidx+1..-1]
 		arg = arg[0,tagidx]
@@ -126,6 +131,7 @@ def pullDockerImage(arg,fout)
 	repository = arg
 	host = repository.split('/')[0]
 	repository = repository[host.size+1..-1]
+	specified_by_digest = tag.index(':')
 
 	https = Net::HTTP.new(host,443)
 	https.use_ssl = true
@@ -140,14 +146,44 @@ def pullDockerImage(arg,fout)
 			end
 			tags = JSON.parse(resp.body)['tags'].sort
 			tags.each{|tag|
-				resp = https.get(
-					'/v2/%s/manifests/%s'%[repository,tag],
-					auth.merge({
-						'Accept' => 'application/vnd.docker.distribution.manifest.v1+json'
-					})
-				)
-				created = JSON.parse(JSON.parse(resp.body)['history'][0]['v1Compatibility'])['created'].split('.')[0]
-				fout.puts "%s\t%s"%[tag,created]
+				if $verbose
+					if false
+						resp = https.get(
+							'/v2/%s/manifests/%s'%[repository,tag],
+							auth.merge({
+								'Accept' => 'application/vnd.docker.distribution.manifest.v1+json'
+							})
+						)
+						repodigest = '---'
+						created = JSON.parse(JSON.parse(resp.body)['history'][0]['v1Compatibility'])['created'].split('.')[0]
+					else
+						resp = https.get(
+							'/v2/%s/manifests/%s'%[repository,tag],
+							auth.merge({
+								'Accept' => 'application/vnd.docker.distribution.manifest.v2+json'
+							})
+						)
+						manifestv2 = JSON.parse(resp.body)
+						repodigest = resp['docker-content-digest']
+						created = nil
+						begin
+							https.request_get(
+								'/v2/%s/blobs/%s'%[repository,manifestv2['config']['digest']],
+								auth
+							){|_resp|
+								ensureResponse(_resp,auth){|resp|
+									created = JSON.parse(resp.read_body)['created'].split('.')[0]
+								}
+							}
+						rescue NoMethodError => e
+							# manifest is unsupported format
+							created = 'N/A'
+						end
+					end
+					fout.puts "%s\t%s\t%s"%[tag,created,repodigest]
+				else
+					fout.puts tag
+				end
 			}
 			return 0
 		end
@@ -170,6 +206,9 @@ def pullDockerImage(arg,fout)
 
 		manifestv2 = JSON.parse(resp.body)
 		repodigest = resp['docker-content-digest']
+		if resp['content-type'] != 'application/vnd.docker.distribution.manifest.v2+json'
+			raise 'only manifest v2 is supported.'
+		end
 		Archive::Tar::Minitar::Output.open(fout){|output|
 			tar = output.tar
 			https.request_get(
@@ -191,6 +230,9 @@ def pullDockerImage(arg,fout)
 				#],
 				'Layers' => []
 			}
+			if specified_by_digest
+				manifestjson.delete('RepoTags')
+			end
 			layerId = ''
 			manifestv2['layers'].each{|layer|
 				layerDigest = layer['digest']

@@ -5,6 +5,8 @@
 # https://raw.githubusercontent.com/moby/moby/master/contrib/download-frozen-image-v2.sh
 # https://stackoverflow.com/a/47624649
 
+verbose = True # verbose output in listing tags
+
 import os
 import sys
 import base64
@@ -102,13 +104,16 @@ def login(wwwAuth,repository):
 
 def pullDockerImage(arg,fout):
     tag = None
-    tagidx = arg.find(':')
+    tagidx = arg.find('@')
+    if tagidx < 0:
+        tagidx = arg.find(':')
     if tagidx >= 0:
         tag = arg[tagidx+1:]
         arg = arg[:tagidx]
     repository = arg
     host = repository.split('/')[0]
     repository = repository[len(host)+1:]
+    specified_by_digest = tag.find(':')>=0
 
     with closing(httplib.HTTPSConnection(host)) as https:
         auth = {}
@@ -121,10 +126,27 @@ def pullDockerImage(arg,fout):
                 https.request('GET','/v2/%s/tags/list'%repository,None,auth)
                 resp = https.getresponse()
             for tag in sorted(json.load(resp)['tags']):
-                https.request('GET','/v2/%s/manifests/%s'%(repository,tag),None,dict(auth,Accept='application/vnd.docker.distribution.manifest.v1+json'))
-                resp = https.getresponse()
-                created = json.loads(json.load(resp)['history'][0]['v1Compatibility'])['created'].split('.')[0]
-                fout.write((('%s\t%s\n')%(tag,created)).encode('utf-8'))
+                if verbose:
+                    if False:
+                        https.request('GET','/v2/%s/manifests/%s'%(repository,tag),None,dict(auth,Accept='application/vnd.docker.distribution.manifest.v1+json'))
+                        resp = https.getresponse()
+                        repodigest = '---'
+                        created = json.loads(json.load(resp)['history'][0]['v1Compatibility'])['created'].split('.')[0]
+                    else:
+                        https.request('GET','/v2/%s/manifests/%s'%(repository,tag),None,dict(auth,Accept='application/vnd.docker.distribution.manifest.v2+json'))
+                        resp = https.getresponse()
+                        manifestv2 = json.load(resp)
+                        repodigest = resp.getheader('docker-content-digest') or '---'
+                        try:
+                            https.request('GET','/v2/%s/blobs/%s'%(repository,manifestv2['config']['digest']),None,auth)
+                            with ensureResponse(https,auth) as resp:
+                                created = json.load(resp)['created'].split('.')[0]
+                        except KeyError as e:
+                            # manifest is unsupported format
+                            created = 'N/A'
+                    fout.write(('%s\t%s\t%s\n'%(tag,created,repodigest)).encode('utf-8'))
+                else:
+                    fout.write(('%s\n'%tag).encode('utf-8'))
             return 0
 
         https.request('GET','/v2/%s/manifests/%s'%(repository,tag),None,dict(auth,Accept='application/vnd.docker.distribution.manifest.v2+json'))
@@ -137,6 +159,8 @@ def pullDockerImage(arg,fout):
 
         manifestv2 = json.load(resp)
         repodigest = resp.getheader('docker-content-digest')
+        if resp.getheader('content-type') != 'application/vnd.docker.distribution.manifest.v2+json':
+            raise Exception('only manifest v2 is supported.')
         with tarfile.open(mode='w|',fileobj=fout) as tar:
             https.request('GET','/v2/%s/blobs/%s'%(repository,manifestv2['config']['digest']),None,auth)
             with ensureResponse(https,auth) as resp:
@@ -154,6 +178,8 @@ def pullDockerImage(arg,fout):
                 #],
                 'Layers' : []
             }
+            if specified_by_digest:
+                del manifestjson['RepoTags']
             layerId = ''
             for layer in manifestv2['layers']:
                 layerDigest = layer['digest']
