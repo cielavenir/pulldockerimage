@@ -131,7 +131,7 @@ def pullDockerImage(arg,fout)
 	repository = arg
 	host = repository.split('/')[0]
 	repository = repository[host.size+1..-1]
-	specified_by_digest = tag.index(':')
+	specified_by_digest = tag && tag.index(':')
 
 	https = Net::HTTP.new(host,443)
 	https.use_ssl = true

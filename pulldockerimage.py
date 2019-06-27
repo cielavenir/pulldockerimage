@@ -113,7 +113,7 @@ def pullDockerImage(arg,fout):
     repository = arg
     host = repository.split('/')[0]
     repository = repository[len(host)+1:]
-    specified_by_digest = tag.find(':')>=0
+    specified_by_digest = tag is not None and tag.find(':')>=0
 
     with closing(httplib.HTTPSConnection(host)) as https:
         auth = {}
