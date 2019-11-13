@@ -33,7 +33,7 @@ try:
 except ImportError:
     import json
 
-def loggedin(host):
+def getCredential(host):
     fname = os.environ['HOME']+'/.docker/config.json'
     if os.path.exists(fname):
         with open(fname) as f:
@@ -45,7 +45,7 @@ def loggedin(host):
                 credsStore = jso['credsStore']
             if credsStore is not None:
                 cmd = 'docker-credential-'+credsStore
-                proc = subprocess.Popen([cmd,'get'],shell=False,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+                proc = subprocess.Popen([cmd,'get'],shell=False,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,bufsize=-1)
                 outs, errs = proc.communicate(host.encode('utf-8'))
                 if proc.returncode == 0:
                     # docker-credential-pass always finishes successfully; need to check json
@@ -90,7 +90,7 @@ def login(wwwAuth,repository):
         resp = authhttps.getresponse()
         if resp.status == 401:
             resp.read()
-            basic = loggedin(realmurl.netloc)
+            basic = getCredential(realmurl.netloc)
             if basic:
                 account = base64.b64decode(basic).decode('utf-8').split(':')[0]
                 authhttps.request('GET','%s?account=%s&scope=repository:%s:pull&service=%s'%(realmurl.path,account,repository,realm['service']),None,{'Authorization':'Basic '+basic})

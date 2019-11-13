@@ -38,7 +38,7 @@ JcQmPnn8wH6P7ts5PIkf0lAenZ7Oj/3wnLaFA1G7nGsyYVF9azOs0CzOfxi0sHH60Pa12GYmPYMgjgP6
 l6q7Cy1cTG/+XJn1BarvNwSfzCQ=
 EOM
 
-def loggedin?(host)
+def getCredential(host)
 	fname = ENV['HOME']+'/.docker/config.json'
 	return nil if !File.exists?(fname)
 	jso = JSON.parse(File.read(fname))
@@ -99,7 +99,7 @@ def login(wwwAuth,repository)
 			'%s?scope=repository:%s:pull&service=%s'%[uri.path,repository,parser.params['service']]
 		)
 		if resp.code.to_i == 401
-			basic = loggedin?(uri.host)
+			basic = getCredential(uri.host)
 			if basic
 				account = Base64.decode64(basic).split(':')[0]
 				resp = authhttps.get(
