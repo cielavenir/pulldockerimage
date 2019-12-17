@@ -17,8 +17,11 @@ require 'uri'
 require 'zlib'
 require 'archive/tar/minitar' # gem install minitar
 
+begin
+require 'mechanize'
+rescue LoadError
 ### ruby-mechanize (C) sparklemotion under MIT license.
-### unless https://github.com/sparklemotion/mechanize/issues/495 is nicely resolved, we cannot install the gem safely.
+### unless https://github.com/sparklemotion/mechanize/issues/495 is nicely resolved, we cannot install the gem safely (need to make it optional).
 ### This defines Mechanize::HTTP::WWWAuthenticateParser class.
 eval Zlib.inflate Base64.decode64 <<EOM
 eNqlVttu00AQffdXDIbKTRucchGVQkzDTeIBEAIkHuIQbZ1pbNVZp7trAlTl29nZ8S0OFRI8WNmd+5w5s4rCqzJTGGijdCJk4CW5
@@ -37,6 +40,7 @@ UQS0VzU/u2TZIF4ePhi4vfWrpb0qC4PLBb/KPBHORDXvZ3NhG3m7CQ1SO/H+Xq5vSzW0j7akoLd7SVrK
 JcQmPnn8wH6P7ts5PIkf0lAenZ7Oj/3wnLaFA1G7nGsyYVF9azOs0CzOfxi0sHH60Pa12GYmPYMgjgP6w+Wwi6I9WBm87OI2PRew
 l6q7Cy1cTG/+XJn1BarvNwSfzCQ=
 EOM
+end
 
 def getCredential(host)
 	fname = ENV['HOME']+'/.docker/config.json'
@@ -58,7 +62,7 @@ def getCredential(host)
 		if $? == 0
 			# docker-credential-pass always finishes successfully; need to check json
 			jso = JSON.parse(s)
-			return Base64.encode64(jso['Username']+':'+jso['Secret']) if (jso['Username']||'').size>0
+			return Base64.strict_encode64(jso['Username']+':'+jso['Secret']) if (jso['Username']||'').size>0
 		end
 	end
 	(jso['auths']||{}).include?(host) ? jso['auths'][host]['auth'] : nil
