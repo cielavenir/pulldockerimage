@@ -148,6 +148,12 @@ def pullDockerImage(arg,fout)
 				auth = login(resp['www-authenticate'],repository)
 				resp = https.get('/v2/%s/tags/list'%repository,auth)
 			end
+			if resp.code.to_i == 404
+				raise 'the specified repository (%s) does not exist on host (%s).'%[repository,host]
+			end
+			if resp.code.to_i/100 != 2
+				raise 'failed to retrieve manifest (%d).'%resp.code.to_i
+			end
 			tags = JSON.parse(resp.body)['tags'].sort
 			tags.each{|tag|
 				if $verbose
@@ -208,6 +214,12 @@ def pullDockerImage(arg,fout)
 			)
 		end
 
+		if resp.code.to_i == 404
+			raise 'the specified image (%s:%s) does not exist on host (%s).'%[repository,tag,host]
+		end
+		if resp.code.to_i/100 != 2
+			raise 'failed to retrieve manifest (%d).'%resp.code.to_i
+		end
 		manifestv2 = JSON.parse(resp.body)
 		repodigest = resp['docker-content-digest']
 		if resp['content-type'] != 'application/vnd.docker.distribution.manifest.v2+json'
