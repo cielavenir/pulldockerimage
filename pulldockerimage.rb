@@ -68,7 +68,8 @@ def getCredential(host)
 	(jso['auths']||{}).include?(host) ? jso['auths'][host]['auth'] : nil
 end
 
-def ensureResponse(resp,auth)
+def ensureResponse(resp,auth_)
+	auth = auth_.dup
 	if ![301,302,307,308].include?(resp.code.to_i)
 		yield resp
 		return
@@ -77,6 +78,9 @@ def ensureResponse(resp,auth)
 	loop{
 		location = resp['location'].chomp
 		locationurl = URI.parse(location)
+		auth.delete('Authorization') if (locationurl.query||'').split('&').any?{|e|
+			['X-Amz-Algorithm', 'Signature'].include? e.split('=')[0]
+		}
 		https = Net::HTTP.new(locationurl.host,locationurl.port)
 		https.use_ssl = true
 		https.verify_mode = OpenSSL::SSL::VERIFY_PEER

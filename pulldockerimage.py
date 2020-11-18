@@ -64,7 +64,8 @@ def makeTarInfo(**kwargs):
     return info
 
 @contextmanager
-def ensureResponse(https,auth):
+def ensureResponse(https,auth_):
+    auth = dict(auth_)
     resp = https.getresponse()
     if resp.status not in [301,302,307,308]:
         yield resp
@@ -73,6 +74,8 @@ def ensureResponse(https,auth):
     while True:
         location = resp.getheader('location')
         locationurl = urlparse(location)
+        if any(e.split('=')[0] in ['X-Amz-Algorithm', 'Signature'] for e in (locationurl.query or '').split('&')):
+            auth.pop('Authorization', None)
         with closing(httplib.HTTPSConnection(locationurl.netloc)) as https:
             https.request('GET',locationurl.path+'?'+locationurl.query,None,auth)
             resp = https.getresponse()
