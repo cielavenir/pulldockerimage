@@ -84,24 +84,25 @@ def ensureResponse(https,auth_):
                 return
             resp.read()
 
-def login(wwwAuth,repository):
+def login(wwwAuth,repository,host=None,forceCredential=False):
     authresp = wwwAuth
     realm = parse_keqv_list(parse_http_list(authresp[authresp.index(' ')+1:]))
     realmurl = urlparse(realm['realm'])
+    credentialHost = host if host is not None else realmurl.netloc
     with closing(httplib.HTTPSConnection(realmurl.netloc)) as authhttps:
         authhttps.request('GET','%s?scope=repository:%s:pull&service=%s'%(realmurl.path,repository,realm['service']),None)
         resp = authhttps.getresponse()
-        if resp.status == 401:
+        if forceCredential or resp.status == 401 or resp.status == 403:
             resp.read()
-            basic = getCredential(realmurl.netloc)
+            basic = getCredential(credentialHost)
             if basic:
                 account = base64.b64decode(basic).decode('utf-8').split(':')[0]
                 authhttps.request('GET','%s?account=%s&scope=repository:%s:pull&service=%s'%(realmurl.path,account,repository,realm['service']),None,{'Authorization':'Basic '+basic})
                 resp = authhttps.getresponse()
                 if resp.status == 401:
-                    raise Exception('Credential is wrong. Please relogin to %s.'%realmurl.hostname)
+                    raise Exception('Credential is wrong (used "%s"). Please relogin to %s.'%(account,credentialHost))
             else:
-                raise Exception('`docker login %s` is required.'%realmurl.hostname)
+                raise Exception('`docker login %s` is required.'%(credentialHost))
         token = json.load(resp)['token']
         return {'Authorization':'Bearer '+token}
 
@@ -125,9 +126,15 @@ def pullDockerImage(arg,fout):
             resp = https.getresponse()
             if resp.status == 401:
                 resp.read()
-                auth = login(resp.getheader('www-authenticate'),repository)
+                auth = login(resp.getheader('www-authenticate'),repository,host,False)
                 https.request('GET','/v2/%s/tags/list'%repository,None,auth)
                 resp = https.getresponse()
+                if resp.status == 401:
+                    sys.stderr.write('"auth" is public image token, entering private image mode.\n')
+                    resp.read()
+                    auth = login(resp.getheader('www-authenticate'),repository,host,True)
+                    https.request('GET','/v2/%s/tags/list'%repository,None,auth)
+                    resp = https.getresponse()
             if resp.status == 404:
                 raise Exception('the specified repository (%s) does not exist on host (%s).'%(repository,host))
             if int(resp.status)//100 != 2:
@@ -160,9 +167,15 @@ def pullDockerImage(arg,fout):
         resp = https.getresponse()
         if resp.status == 401:
             resp.read()
-            auth = login(resp.getheader('www-authenticate'),repository)
+            auth = login(resp.getheader('www-authenticate'),repository,host,False)
             https.request('GET','/v2/%s/manifests/%s'%(repository,tag),None,dict(auth,Accept='application/vnd.docker.distribution.manifest.v2+json'))
             resp = https.getresponse()
+            if resp.status == 401:
+                sys.stderr.write('"auth" is public image token, entering private image mode.\n')
+                resp.read()
+                auth = login(resp.getheader('www-authenticate'),repository,host,True)
+                https.request('GET','/v2/%s/manifests/%s'%(repository,tag),None,dict(auth,Accept='application/vnd.docker.distribution.manifest.v2+json'))
+                resp = https.getresponse()
 
         if resp.status == 404:
             raise Exception('the specified image (%s:%s) does not exist on host (%s).'%(repository,tag,host))
@@ -253,7 +266,7 @@ If credsStore is not used, .docker/config.json should look like this.
 
 {
         "auths": {
-                "auth.docker.io": {
+                "index.docker.io": {
                         "auth": base64(username:password)
                 }
         }

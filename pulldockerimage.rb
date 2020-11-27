@@ -96,9 +96,10 @@ def ensureResponse(resp,auth_)
 	}
 end
 
-def login(wwwAuth,repository)
+def login(wwwAuth,repository,host=nil,forceCredential=false)
 	parser = Mechanize::HTTP::WWWAuthenticateParser.new.parse(wwwAuth)[0]
 	uri = URI.parse(parser.params['realm'])
+	credentialHost = host || uri.host
 	authhttps = Net::HTTP.new(uri.host,uri.port)
 	authhttps.use_ssl = true
 	authhttps.verify_mode = OpenSSL::SSL::VERIFY_PEER
@@ -106,8 +107,8 @@ def login(wwwAuth,repository)
 		resp = authhttps.get(
 			'%s?scope=repository:%s:pull&service=%s'%[uri.path,repository,parser.params['service']]
 		)
-		if resp.code.to_i == 401
-			basic = getCredential(uri.host)
+		if forceCredential || resp.code.to_i == 401 || resp.code.to_i == 403
+			basic = getCredential(credentialHost)
 			if basic
 				account = Base64.decode64(basic).split(':')[0]
 				resp = authhttps.get(
@@ -115,10 +116,10 @@ def login(wwwAuth,repository)
 					'Authorization' => 'Basic '+basic
 				)
 				if resp.code.to_i == 401
-					raise 'Credential is wrong. Please relogin to %s.'%uri.host
+					raise 'Credential is wrong (used "%s"). Please relogin to %s.'%[account,credentialHost]
 				end
 			else
-				raise '`docker login %s` is required.'%uri.host
+				raise '`docker login %s` is required.'%credentialHost
 			end
 		end
 		token = JSON.parse(resp.body)['token']
@@ -149,8 +150,13 @@ def pullDockerImage(arg,fout)
 		if !tag
 			resp = https.get('/v2/%s/tags/list'%repository,auth)
 			if resp.code.to_i == 401
-				auth = login(resp['www-authenticate'],repository)
+				auth = login(resp['www-authenticate'],repository,host,false)
 				resp = https.get('/v2/%s/tags/list'%repository,auth)
+				if resp.code.to_i == 401
+					STDERR.puts '"auth" is public image token, entering private image mode.'
+					auth = login(resp['www-authenticate'],repository,host,true)
+					resp = https.get('/v2/%s/tags/list'%repository,auth)
+				end
 			end
 			if resp.code.to_i == 404
 				raise 'the specified repository (%s) does not exist on host (%s).'%[repository,host]
@@ -209,13 +215,23 @@ def pullDockerImage(arg,fout)
 			})
 		)
 		if resp.code.to_i == 401
-			auth = login(resp['www-authenticate'],repository)
+			auth = login(resp['www-authenticate'],repository,host,false)
 			resp = https.get(
 				'/v2/%s/manifests/%s'%[repository,tag],
 				auth.merge({
 					'Accept' => 'application/vnd.docker.distribution.manifest.v2+json'
 				})
 			)
+			if resp.code.to_i == 401
+				STDERR.puts '"auth" is public image token, entering private image mode.'
+				auth = login(resp['www-authenticate'],repository,host,true)
+				resp = https.get(
+					'/v2/%s/manifests/%s'%[repository,tag],
+					auth.merge({
+						'Accept' => 'application/vnd.docker.distribution.manifest.v2+json'
+					})
+				)
+			end
 		end
 
 		if resp.code.to_i == 404
@@ -330,7 +346,7 @@ If credsStore is not used, .docker/config.json should look like this.
 
 {
         "auths": {
-                "auth.docker.io": {
+                "index.docker.io": {
                         "auth": base64(username:password)
                 }
         }
