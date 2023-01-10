@@ -33,7 +33,7 @@ try:
 except ImportError:
     import json
 
-def getCredential(host):
+def getCredential(host, b64=True):
     fname = os.environ['HOME']+'/.docker/config.json'
     if os.path.exists(fname):
         with open(fname) as f:
@@ -51,9 +51,15 @@ def getCredential(host):
                     # docker-credential-pass always finishes successfully; need to check json
                     jso = json.loads(outs.decode('utf-8'))
                     if jso.get('Username'):
-                        return base64.b64encode((jso['Username']+':'+jso['Secret']).encode('utf-8')).decode('utf-8')
+                        if b64:
+                            return base64.b64encode((jso['Username']+':'+jso['Secret']).encode('utf-8')).decode('utf-8')
+                        else:
+                            return jso['Username']+':'+jso['Secret']
             if host in jso.get('auths',{}):
-                return jso['auths'][host]['auth']
+                if b64:
+                    return jso['auths'][host]['auth']
+                else:
+                    return base64.b64decode(jso['auths'][host]['auth'].encode('utf-8')).decode('utf-8')
 
 def makeTarInfo(**kwargs):
     info = tarfile.TarInfo(kwargs.pop('name'))
@@ -84,27 +90,52 @@ def ensureResponse(https,auth_):
                 return
             resp.read()
 
-def login(wwwAuth,repository,host=None,forceCredential=False):
+def login(wwwAuth,host=None,forceCredential=False):
     authresp = wwwAuth
+    # print(wwwAuth)
     realm = parse_keqv_list(parse_http_list(authresp[authresp.index(' ')+1:]))
     realmurl = urlparse(realm['realm'])
     credentialHost = host if host is not None else realmurl.netloc
     with closing(httplib.HTTPSConnection(realmurl.netloc)) as authhttps:
-        authhttps.request('GET','%s?scope=repository:%s:pull&service=%s'%(realmurl.path,repository,realm['service']),None)
+        #authhttps.request('GET','%s?scope=repository:%s:pull&service=%s'%(realmurl.path,repository,realm['service']),None)
+        authhttps.request('GET','%s?scope=%s&service=%s'%(realmurl.path,realm['scope'],realm['service']),None)
         resp = authhttps.getresponse()
         if forceCredential or resp.status == 401 or resp.status == 403:
             resp.read()
             basic = getCredential(credentialHost)
             if basic:
                 account = base64.b64decode(basic).decode('utf-8').split(':')[0]
-                authhttps.request('GET','%s?account=%s&scope=repository:%s:pull&service=%s'%(realmurl.path,account,repository,realm['service']),None,{'Authorization':'Basic '+basic})
+                authhttps.request('GET','%s?account=%s&scope=%s&service=%s'%(realmurl.path,account,realm['scope'],realm['service']),None,{'Authorization':'Basic '+basic})
                 resp = authhttps.getresponse()
                 if resp.status == 401:
                     raise Exception('Credential is wrong (used "%s"). Please relogin to %s.'%(account,credentialHost))
             else:
                 raise Exception('`docker login %s` is required.'%(credentialHost))
+        if int(resp.status)//100 == 5:
+            raise Exception('failed to get login token (status %d): %s'%(int(resp.status), resp.read()))
         token = json.load(resp)['token']
         return {'Authorization':'Bearer '+token}
+
+def ensureManifest(https, host, path, headers={}):
+    auth = {}
+    https.request('GET',path,None,dict(auth,**headers))
+    resp = https.getresponse()
+    if resp.status == 401:
+        resp.read()
+        auth = login(resp.getheader('www-authenticate'),host,False)
+        https.request('GET',path,None,dict(auth,**headers))
+        resp = https.getresponse()
+        if resp.status == 401:
+            sys.stderr.write('auth failed; got token for public image, forcing login to enter private image mode.\n')
+            resp.read()
+            auth = login(resp.getheader('www-authenticate'),host,True)
+            https.request('GET',path,None,dict(auth,**headers))
+            resp = https.getresponse()
+    # if resp.status == 404:
+    #     raise Exception('the specified repository (%s) does not exist on host (%s).'%(repository,host))
+    if int(resp.status)//100 != 2:
+        raise Exception('failed to retrieve manifest (%d).'%resp.status)
+    return auth, resp
 
 def pullDockerImage(arg,fout):
     tag = None
@@ -120,25 +151,14 @@ def pullDockerImage(arg,fout):
     specified_by_digest = tag is not None and tag.find(':')>=0
 
     with closing(httplib.HTTPSConnection(host)) as https:
-        auth = {}
+        if repository == '' or repository == '/':
+            auth, resp = ensureManifest(https, host, '/v2/_catalog')
+            for repository in sorted(json.load(resp)['repositories']):
+                fout.write(('%s\n'%repository).encode('utf-8'))
+            return 0
+
         if tag is None:
-            https.request('GET','/v2/%s/tags/list'%repository,None,auth)
-            resp = https.getresponse()
-            if resp.status == 401:
-                resp.read()
-                auth = login(resp.getheader('www-authenticate'),repository,host,False)
-                https.request('GET','/v2/%s/tags/list'%repository,None,auth)
-                resp = https.getresponse()
-                if resp.status == 401:
-                    sys.stderr.write('"auth" is public image token, entering private image mode.\n')
-                    resp.read()
-                    auth = login(resp.getheader('www-authenticate'),repository,host,True)
-                    https.request('GET','/v2/%s/tags/list'%repository,None,auth)
-                    resp = https.getresponse()
-            if resp.status == 404:
-                raise Exception('the specified repository (%s) does not exist on host (%s).'%(repository,host))
-            if int(resp.status)//100 != 2:
-                raise Exception('failed to retrieve manifest (%d).'%resp.status)
+            auth, resp = ensureManifest(https, host, '/v2/%s/tags/list'%repository)
             for tag in sorted(json.load(resp)['tags']):
                 if verbose:
                     if False:
@@ -163,24 +183,7 @@ def pullDockerImage(arg,fout):
                     fout.write(('%s\n'%tag).encode('utf-8'))
             return 0
 
-        https.request('GET','/v2/%s/manifests/%s'%(repository,tag),None,dict(auth,Accept='application/vnd.docker.distribution.manifest.v2+json'))
-        resp = https.getresponse()
-        if resp.status == 401:
-            resp.read()
-            auth = login(resp.getheader('www-authenticate'),repository,host,False)
-            https.request('GET','/v2/%s/manifests/%s'%(repository,tag),None,dict(auth,Accept='application/vnd.docker.distribution.manifest.v2+json'))
-            resp = https.getresponse()
-            if resp.status == 401:
-                sys.stderr.write('"auth" is public image token, entering private image mode.\n')
-                resp.read()
-                auth = login(resp.getheader('www-authenticate'),repository,host,True)
-                https.request('GET','/v2/%s/manifests/%s'%(repository,tag),None,dict(auth,Accept='application/vnd.docker.distribution.manifest.v2+json'))
-                resp = https.getresponse()
-
-        if resp.status == 404:
-            raise Exception('the specified image (%s:%s) does not exist on host (%s).'%(repository,tag,host))
-        if int(resp.status)//100 != 2:
-            raise Exception('failed to retrieve manifest (%d).'%resp.status)
+        auth, resp = ensureManifest(https, host, '/v2/%s/manifests/%s'%(repository,tag), headers={'Accept':'application/vnd.docker.distribution.manifest.v2+json'})
         manifestv2 = json.load(resp)
         repodigest = resp.getheader('docker-content-digest')
         if resp.getheader('content-type') != 'application/vnd.docker.distribution.manifest.v2+json':

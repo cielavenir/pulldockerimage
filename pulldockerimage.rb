@@ -22,6 +22,7 @@ require 'mechanize'
 rescue LoadError
 ### ruby-mechanize (C) sparklemotion under MIT license.
 ### unless https://github.com/sparklemotion/mechanize/issues/495 is nicely resolved, we cannot install the gem safely (need to make it optional).
+### now mechanize -v ''>=2.8.0' is safe but it requires Ruby 2.5 and not so compatible.
 ### This defines Mechanize::HTTP::WWWAuthenticateParser class.
 eval Zlib.inflate Base64.decode64 <<EOM
 eNqlVttu00AQffdXDIbKTRucchGVQkzDTeIBEAIkHuIQbZ1pbNVZp7trAlTl29nZ8S0OFRI8WNmd+5w5s4rCqzJTGGijdCJk4CW5
@@ -42,7 +43,7 @@ l6q7Cy1cTG/+XJn1BarvNwSfzCQ=
 EOM
 end
 
-def getCredential(host)
+def getCredential(host, b64=true)
 	fname = ENV['HOME']+'/.docker/config.json'
 	return nil if !File.exists?(fname)
 	jso = JSON.parse(File.read(fname))
@@ -62,10 +63,22 @@ def getCredential(host)
 		if $? == 0
 			# docker-credential-pass always finishes successfully; need to check json
 			jso = JSON.parse(s)
-			return Base64.strict_encode64(jso['Username']+':'+jso['Secret']) if (jso['Username']||'').size>0
+			if (jso['Username']||'').size>0
+				if b64
+					return Base64.strict_encode64(jso['Username']+':'+jso['Secret'])
+				else
+					return jso['Username']+':'+jso['Secret']
+				end
+			end
 		end
 	end
-	(jso['auths']||{}).include?(host) ? jso['auths'][host]['auth'] : nil
+	if (jso['auths']||{}).include?(host)
+		if b64
+			return jso['auths'][host]['auth']
+		else
+			return Base64.decode64(jso['auths'][host]['auth'])
+		end
+	end
 end
 
 def ensureResponse(resp,auth_)
@@ -96,7 +109,8 @@ def ensureResponse(resp,auth_)
 	}
 end
 
-def login(wwwAuth,repository,host=nil,forceCredential=false)
+def login(wwwAuth,host=nil,forceCredential=false)
+	# puts wwwAuth
 	parser = Mechanize::HTTP::WWWAuthenticateParser.new.parse(wwwAuth)[0]
 	uri = URI.parse(parser.params['realm'])
 	credentialHost = host || uri.host
@@ -105,14 +119,15 @@ def login(wwwAuth,repository,host=nil,forceCredential=false)
 	authhttps.verify_mode = OpenSSL::SSL::VERIFY_PEER
 	authhttps.start{
 		resp = authhttps.get(
-			'%s?scope=repository:%s:pull&service=%s'%[uri.path,repository,parser.params['service']]
+			# '%s?scope=repository:%s:pull&service=%s'%[uri.path,repository,parser.params['service']]
+			'%s?scope=%s&service=%s'%[uri.path,parser.params['scope'],parser.params['service']]
 		)
 		if forceCredential || resp.code.to_i == 401 || resp.code.to_i == 403
 			basic = getCredential(credentialHost)
 			if basic
 				account = Base64.decode64(basic).split(':')[0]
 				resp = authhttps.get(
-					'%s?account=%s&scope=repository:%s:pull&service=%s'%[uri.path,account,repository,parser.params['service']],
+					'%s?account=%s&scope=%s&service=%s'%[uri.path,account,parser.params['scope'],parser.params['service']],
 					'Authorization' => 'Basic '+basic
 				)
 				if resp.code.to_i == 401
@@ -125,6 +140,27 @@ def login(wwwAuth,repository,host=nil,forceCredential=false)
 		token = JSON.parse(resp.body)['token']
 		return {'Authorization' => 'Bearer '+token}
 	}
+end
+
+def ensureManifest(https, host, path, headers={})
+	auth = {}
+	resp = https.get(path,auth.merge(headers))
+	if resp.code.to_i == 401
+		auth = login(resp['www-authenticate'],host,false)
+		resp = https.get(path,auth.merge(headers))
+		if resp.code.to_i == 401
+			STDERR.puts 'auth failed; got token for public image, forcing login to enter private image mode.'
+			auth = login(resp['www-authenticate'],host,true)
+			resp = https.get(path,auth.merge(headers))
+		end
+	end
+	# if resp.code.to_i == 404
+	# 	raise 'the specified repository (%s) does not exist on host (%s).'%[repository,host]
+	# end
+	if resp.code.to_i/100 != 2
+		raise 'failed to retrieve manifest (%d).'%resp.code.to_i
+	end
+	return auth, resp
 end
 
 def pullDockerImage(arg,fout)
@@ -146,24 +182,17 @@ def pullDockerImage(arg,fout)
 	https.use_ssl = true
 	https.verify_mode = OpenSSL::SSL::VERIFY_PEER
 	https.start{
-		auth = {}
+		if !repository || repository == '' || repository == '/'
+			auth, resp = ensureManifest(https, host, '/v2/_catalog')
+			repositories = JSON.parse(resp.body)['repositories'].sort
+			repositories.each{|repository|
+				fout.puts repository
+			}
+			return 0
+		end
+
 		if !tag
-			resp = https.get('/v2/%s/tags/list'%repository,auth)
-			if resp.code.to_i == 401
-				auth = login(resp['www-authenticate'],repository,host,false)
-				resp = https.get('/v2/%s/tags/list'%repository,auth)
-				if resp.code.to_i == 401
-					STDERR.puts '"auth" is public image token, entering private image mode.'
-					auth = login(resp['www-authenticate'],repository,host,true)
-					resp = https.get('/v2/%s/tags/list'%repository,auth)
-				end
-			end
-			if resp.code.to_i == 404
-				raise 'the specified repository (%s) does not exist on host (%s).'%[repository,host]
-			end
-			if resp.code.to_i/100 != 2
-				raise 'failed to retrieve manifest (%d).'%resp.code.to_i
-			end
+			auth, resp = ensureManifest(https, host, '/v2/%s/tags/list'%repository)
 			tags = JSON.parse(resp.body)['tags'].sort
 			tags.each{|tag|
 				if $verbose
@@ -208,38 +237,9 @@ def pullDockerImage(arg,fout)
 			return 0
 		end
 
-		resp = https.get(
-			'/v2/%s/manifests/%s'%[repository,tag],
-			auth.merge({
-				'Accept' => 'application/vnd.docker.distribution.manifest.v2+json'
-			})
-		)
-		if resp.code.to_i == 401
-			auth = login(resp['www-authenticate'],repository,host,false)
-			resp = https.get(
-				'/v2/%s/manifests/%s'%[repository,tag],
-				auth.merge({
-					'Accept' => 'application/vnd.docker.distribution.manifest.v2+json'
-				})
-			)
-			if resp.code.to_i == 401
-				STDERR.puts '"auth" is public image token, entering private image mode.'
-				auth = login(resp['www-authenticate'],repository,host,true)
-				resp = https.get(
-					'/v2/%s/manifests/%s'%[repository,tag],
-					auth.merge({
-						'Accept' => 'application/vnd.docker.distribution.manifest.v2+json'
-					})
-				)
-			end
-		end
-
-		if resp.code.to_i == 404
-			raise 'the specified image (%s:%s) does not exist on host (%s).'%[repository,tag,host]
-		end
-		if resp.code.to_i/100 != 2
-			raise 'failed to retrieve manifest (%d).'%resp.code.to_i
-		end
+		auth, resp = ensureManifest(https, host, '/v2/%s/manifests/%s'%[repository,tag], {
+			'Accept' => 'application/vnd.docker.distribution.manifest.v2+json'
+		})
 		manifestv2 = JSON.parse(resp.body)
 		repodigest = resp['docker-content-digest']
 		if resp['content-type'] != 'application/vnd.docker.distribution.manifest.v2+json'
