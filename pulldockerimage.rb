@@ -142,14 +142,16 @@ def login(wwwAuth,host=nil,forceCredential=false)
 	}
 end
 
-def ensureManifest(https, host, path, headers={})
-	auth = {}
+def ensureManifest(https, host, path, headers={}, auth=nil)
+	if !auth
+		auth = {}
+	end
 	resp = https.get(path,auth.merge(headers))
 	if resp.code.to_i == 401
 		auth = login(resp['www-authenticate'],host,false)
 		resp = https.get(path,auth.merge(headers))
 		if resp.code.to_i == 401
-			STDERR.puts 'auth failed; got token for public image, forcing login to enter private image mode.'
+			STDERR.puts 'auth failed; probably got token for public image, forcing login to enter private image mode.'
 			auth = login(resp['www-authenticate'],host,true)
 			resp = https.get(path,auth.merge(headers))
 		end
@@ -183,10 +185,17 @@ def pullDockerImage(arg,fout)
 	https.verify_mode = OpenSSL::SSL::VERIFY_PEER
 	https.start{
 		if !repository || repository == '' || repository == '/'
-			auth, resp = ensureManifest(https, host, '/v2/_catalog')
-			repositories = JSON.parse(resp.body)['repositories'].sort
-			repositories.each{|repository|
-				fout.puts repository
+			auth = {}
+			perPage = 100
+			lastRepository = ''
+			loop {
+				auth, resp = ensureManifest(https, host, '/v2/_catalog?last=%s&n=%d' % [lastRepository, perPage], {}, auth)
+				repositories = JSON.parse(resp.body)['repositories']
+				repositories.sort.each{|repository|
+					fout.puts repository
+				}
+				break if repositories.size < perPage
+				lastRepository = repositories[-1]
 			}
 			return 0
 		end

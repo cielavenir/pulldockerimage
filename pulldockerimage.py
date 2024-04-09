@@ -17,7 +17,8 @@ from contextlib import closing, contextmanager
 
 if sys.version_info[0]>=3:
     import http.client as httplib
-    from urllib.request import parse_http_list, parse_keqv_list, urlparse
+    from urllib.request import parse_http_list, parse_keqv_list
+    from urllib.parse import urlparse
     from io import BytesIO
     binstdout = sys.stdout.buffer
 else:
@@ -116,8 +117,9 @@ def login(wwwAuth,host=None,forceCredential=False):
         token = json.load(resp)['token']
         return {'Authorization':'Bearer '+token}
 
-def ensureManifest(https, host, path, headers={}):
-    auth = {}
+def ensureManifest(https, host, path, headers={}, auth=None):
+    if auth is None:
+        auth = {}
     https.request('GET',path,None,dict(auth,**headers))
     resp = https.getresponse()
     if resp.status == 401:
@@ -126,7 +128,7 @@ def ensureManifest(https, host, path, headers={}):
         https.request('GET',path,None,dict(auth,**headers))
         resp = https.getresponse()
         if resp.status == 401:
-            sys.stderr.write('auth failed; got token for public image, forcing login to enter private image mode.\n')
+            sys.stderr.write('auth failed; probably got token for public image, forcing login to enter private image mode.\n')
             resp.read()
             auth = login(resp.getheader('www-authenticate'),host,True)
             https.request('GET',path,None,dict(auth,**headers))
@@ -152,9 +154,17 @@ def pullDockerImage(arg,fout):
 
     with closing(httplib.HTTPSConnection(host)) as https:
         if repository == '' or repository == '/':
-            auth, resp = ensureManifest(https, host, '/v2/_catalog')
-            for repository in sorted(json.load(resp)['repositories']):
-                fout.write(('%s\n'%repository).encode('utf-8'))
+            auth = {}
+            perPage = 100
+            lastRepository = ''
+            while True:
+                auth, resp = ensureManifest(https, host, '/v2/_catalog?last=%s&n=%d' % (lastRepository, perPage), headers={}, auth=auth)
+                repositories = json.load(resp)['repositories']
+                for repository in sorted(repositories):
+                    fout.write(('%s\n'%repository).encode('utf-8'))
+                if len(repositories) < perPage:
+                    break
+                lastRepository = repositories[-1]
             return 0
 
         if tag is None:
