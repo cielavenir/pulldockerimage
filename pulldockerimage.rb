@@ -22,7 +22,7 @@ require 'mechanize'
 rescue LoadError
 ### ruby-mechanize (C) sparklemotion under MIT license.
 ### unless https://github.com/sparklemotion/mechanize/issues/495 is nicely resolved, we cannot install the gem safely (need to make it optional).
-### now mechanize -v ''>=2.8.0' is safe but it requires Ruby 2.5 and not so compatible.
+### now mechanize -v '>=2.8.0' is safe but it requires Ruby 2.5 and not so compatible.
 ### This defines Mechanize::HTTP::WWWAuthenticateParser class.
 eval Zlib.inflate Base64.decode64 <<EOM
 eNqlVttu00AQffdXDIbKTRucchGVQkzDTeIBEAIkHuIQbZ1pbNVZp7trAlTl29nZ8S0OFRI8WNmd+5w5s4rCqzJTGGijdCJk4CW5
@@ -45,7 +45,7 @@ end
 
 def getCredential(host, b64=true)
 	fname = ENV['HOME']+'/.docker/config.json'
-	return nil if !File.exists?(fname)
+	return nil if !File.file?(fname)
 	jso = JSON.parse(File.read(fname))
 	credsStore = nil
 	if (jso['credHelpers']||{})[host]

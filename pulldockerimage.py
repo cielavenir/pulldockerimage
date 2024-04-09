@@ -35,7 +35,7 @@ except ImportError:
 
 def getCredential(host, b64=True):
     fname = os.environ['HOME']+'/.docker/config.json'
-    if os.path.exists(fname):
+    if os.path.isfile(fname):
         with open(fname) as f:
             jso = json.load(f)
             credsStore = None
