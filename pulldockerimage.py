@@ -1,11 +1,10 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 #coding:utf-8
 
 # acknowledgement:
 # https://raw.githubusercontent.com/moby/moby/master/contrib/download-frozen-image-v2.sh
 # https://stackoverflow.com/a/47624649
-
-verbose = True # verbose output in listing tags
+# https://github.com/mayflower/docker-ls
 
 import os
 import sys
@@ -29,10 +28,14 @@ else:
     BytesIO = StringIO
     binstdout = sys.stdout
 
+'''
 try:
-    import ujson as json
+    import ujson as json  # print(ujson.dumps(['a/b'])) => ["a\/b"], weird backslash
 except ImportError:
     import json
+'''
+
+import json
 
 def getCredential(host, b64=True):
     fname = os.environ['HOME']+'/.docker/config.json'
@@ -134,12 +137,14 @@ def ensureManifest(https, host, path, headers={}, auth=None):
             https.request('GET',path,None,dict(auth,**headers))
             resp = https.getresponse()
     # if resp.status == 404:
+    #     resp.read()
     #     raise Exception('the specified repository (%s) does not exist on host (%s).'%(repository,host))
     if int(resp.status)//100 != 2:
+        resp.read()
         raise Exception('failed to retrieve manifest (%d).'%resp.status)
     return auth, resp
 
-def pullDockerImage(arg,fout):
+def pullDockerImage(arg,fout,platform=None,verbose=False,listing=False,touch=False,delete=False):
     tag = None
     tagidx = arg.find('@')
     if tagidx < 0:
@@ -167,37 +172,98 @@ def pullDockerImage(arg,fout):
                 lastRepository = repositories[-1]
             return 0
 
-        if tag is None:
+        if tag is None or listing:
+            option_tag = tag
             auth, resp = ensureManifest(https, host, '/v2/%s/tags/list'%repository)
             for tag in sorted(json.load(resp)['tags']):
+                if option_tag is None:
+                    verbose = False
+                elif option_tag != tag:
+                    continue
                 if verbose:
                     if False:
                         https.request('GET','/v2/%s/manifests/%s'%(repository,tag),None,dict(auth,Accept='application/vnd.docker.distribution.manifest.v1+json'))
                         resp = https.getresponse()
                         repodigest = '---'
                         created = json.loads(json.load(resp)['history'][0]['v1Compatibility'])['created'].split('.')[0]
+                        fout.write(('%s\t%s\t%s\n'%(tag,created,repodigest)).encode('utf-8'))
                     else:
                         https.request('GET','/v2/%s/manifests/%s'%(repository,tag),None,dict(auth,Accept='application/vnd.docker.distribution.manifest.v2+json'))
                         resp = https.getresponse()
                         manifestv2 = json.load(resp)
-                        repodigest = resp.getheader('docker-content-digest') or '---'
-                        try:
-                            https.request('GET','/v2/%s/blobs/%s'%(repository,manifestv2['config']['digest']),None,auth)
-                            with ensureResponse(https,auth) as resp:
-                                created = json.load(resp)['created'].split('.')[0]
-                        except KeyError as e:
-                            # manifest is unsupported format
-                            created = 'N/A'
-                    fout.write(('%s\t%s\t%s\n'%(tag,created,repodigest)).encode('utf-8'))
+                        if resp.getheader('content-type') in ['application/vnd.docker.distribution.manifest.list.v2+json', 'application/vnd.oci.image.index.v1+json']:
+                            for manifest in manifestv2['manifests']:
+                                # print(manifest)
+                                https.request('GET','/v2/%s/manifests/%s'%(repository,manifest['digest']),None,dict(auth,Accept='application/vnd.docker.distribution.manifest.v2+json'))
+                                resp = https.getresponse()
+                                manifestManifest = json.load(resp)
+                                try:
+                                    https.request('GET','/v2/%s/blobs/%s'%(repository,manifestManifest['config']['digest']),None,auth)
+                                    with ensureResponse(https,auth) as resp:
+                                        data = json.load(resp)
+                                        created = data['created'].split('.')[0]
+                                except KeyError as e:
+                                    # manifest is unsupported format
+                                    created = 'N/A'
+                                fout.write(('%s(%s/%s)\t%s\t%s\n'%(tag,manifest['platform'].get('os'),manifest['platform'].get('architecture'),created,manifest['digest'])).encode('utf-8'))
+                        else:
+                            repodigest = resp.getheader('docker-content-digest') or '---'
+                            try:
+                                https.request('GET','/v2/%s/blobs/%s'%(repository,manifestv2['config']['digest']),None,auth)
+                                with ensureResponse(https,auth) as resp:
+                                    created = json.load(resp)['created'].split('.')[0]
+                            except KeyError as e:
+                                # manifest is unsupported format
+                                created = 'N/A'
+                            fout.write(('%s\t%s\t%s\n'%(tag,created,repodigest)).encode('utf-8'))
                 else:
                     fout.write(('%s\n'%tag).encode('utf-8'))
             return 0
 
         auth, resp = ensureManifest(https, host, '/v2/%s/manifests/%s'%(repository,tag), headers={'Accept':'application/vnd.docker.distribution.manifest.v2+json'})
-        manifestv2 = json.load(resp)
+        manifestv2Json = resp.read()
+        manifestv2 = json.loads(manifestv2Json)
         repodigest = resp.getheader('docker-content-digest')
-        if resp.getheader('content-type') != 'application/vnd.docker.distribution.manifest.v2+json':
-            raise Exception('only manifest v2 is supported.')
+        if resp.getheader('content-type') in ['application/vnd.docker.distribution.manifest.list.v2+json', 'application/vnd.oci.image.index.v1+json']:
+            for manifest in manifestv2['manifests']:
+                if platform == '%s/%s' % (manifest['platform'].get('os'), manifest['platform'].get('architecture')):
+                    auth, resp = ensureManifest(https, host, '/v2/%s/manifests/%s'%(repository,manifest['digest']), headers={'Accept':'application/vnd.docker.distribution.manifest.v2+json'})
+                    manifestv2Json = resp.read()
+                    manifestv2 = json.loads(manifestv2Json)
+                    break
+            else:
+                raise Exception('%s manifest is a list but it does not contain proper image entry' % tag)
+        # ensure manifestv2 is right before proceeding anything
+        if resp.getheader('content-type') not in ['application/vnd.docker.distribution.manifest.v2+json', 'application/vnd.oci.image.manifest.v1+json']:
+            raise Exception('only manifest v2 is supported (%s).' % resp.getheader('content-type'))
+        if delete:
+            fout.write(('DELETE /v2/%s/manifests/%s\n'%(repository,repodigest)).encode('utf-8'))
+            https.request('DELETE','/v2/%s/manifests/%s'%(repository,repodigest),None,dict(auth,Accept='application/vnd.docker.distribution.manifest.v2+json'))
+            resp = https.getresponse()
+            if resp.status == 401:
+                resp.read()
+                auth = login(resp.getheader('www-authenticate'),host,True)
+                https.request('DELETE','/v2/%s/manifests/%s'%(repository,repodigest),None,dict(auth,Accept='application/vnd.docker.distribution.manifest.v2+json'))
+                resp = https.getresponse()
+            if int(resp.status)//100 != 2:
+                raise Exception('failed delete manifest (%r)' % resp.read())
+            fout.write(resp.read())
+            fout.write(b'\n')
+            return 0
+        if touch:
+            fout.write(('PUT /v2/%s/manifests/%s\n'%(repository,repodigest)).encode('utf-8'))
+            https.request('PUT','/v2/%s/manifests/%s'%(repository,repodigest),manifestv2Json,dict(auth,**{'Content-Type':'application/vnd.docker.distribution.manifest.v2+json','Accept':'application/vnd.docker.distribution.manifest.v2+json'}))
+            resp = https.getresponse()
+            if resp.status == 401:
+                resp.read()
+                auth = login(resp.getheader('www-authenticate'),host,True)
+                https.request('PUT','/v2/%s/manifests/%s'%(repository,repodigest),manifestv2Json,dict(auth,**{'Content-Type':'application/vnd.docker.distribution.manifest.v2+json','Accept':'application/vnd.docker.distribution.manifest.v2+json'}))
+                resp = https.getresponse()
+            if int(resp.status)//100 != 2:
+                raise Exception('failed touch manifest (%r)' % resp.read())
+            fout.write(resp.read())
+            fout.write(b'\n')
+            return 0
         with tarfile.open(mode='w|',fileobj=fout) as tar:
             https.request('GET','/v2/%s/blobs/%s'%(repository,manifestv2['config']['digest']),None,auth)
             with ensureResponse(https,auth) as resp:
@@ -267,13 +333,15 @@ def pullDockerImage(arg,fout):
     return 0
 
 if __name__ == '__main__':
-    if len(sys.argv)<2:
-        sys.stderr.write(
-'''pulldockerimage.py host/repository:tag > archive.tar
+    import argparse
+    description = '''
+pulldockerimage.py host/repository:tag > archive.tar
 eg: index.docker.io/library/ubuntu:devel > ubuntu.tar
 
 generate a docker image directly (without deploying to the client machine).
+'''.strip()
 
+    epilog = '''
 `docker login` is required prior if authorization is required.
 If credsStore is not used, .docker/config.json should look like this.
 
@@ -284,6 +352,16 @@ If credsStore is not used, .docker/config.json should look like this.
                 }
         }
 }
-''')
-        exit(1)
-    exit(pullDockerImage(sys.argv[1],binstdout))
+'''.strip()
+
+    platform_default = 'linux/amd64'
+
+    parser = argparse.ArgumentParser(description=description, epilog=epilog, formatter_class=argparse.RawTextHelpFormatter)
+    parser.add_argument('--platform',type=str,default=platform_default,help='platform (%s)'%platform_default)
+    parser.add_argument('-v','--verbose',action='store_true',help='verbose output in listing tags (note: massive amounts of request will be used)')
+    parser.add_argument('-l','--list',action='store_true',help='list images')
+    parser.add_argument('--touch',action='store_true',help='touch manifest')
+    parser.add_argument('--delete',action='store_true',help='delete image')
+    parser.add_argument('image_tag')
+    args = parser.parse_args(sys.argv[1:])
+    exit(pullDockerImage(args.image_tag,binstdout,platform=args.platform,verbose=args.verbose,listing=args.list,touch=args.touch,delete=args.delete))

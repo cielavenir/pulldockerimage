@@ -5,8 +5,7 @@
 # acknowledgement:
 # https://raw.githubusercontent.com/moby/moby/master/contrib/download-frozen-image-v2.sh
 # https://stackoverflow.com/a/47624649
-
-$verbose = true # verbose output in listing tags
+# https://github.com/mayflower/docker-ls
 
 require 'net/https'
 require 'json'
@@ -24,6 +23,9 @@ rescue LoadError
 ### unless https://github.com/sparklemotion/mechanize/issues/495 is nicely resolved, we cannot install the gem safely (need to make it optional).
 ### now mechanize -v '>=2.8.0' is safe but it requires Ruby 2.5 and not so compatible.
 ### This defines Mechanize::HTTP::WWWAuthenticateParser class.
+if RUBY_VERSION >= '2.5'
+	raise LoadError, 'Failed to require mechanize, it is optional only for Ruby<2.5 (the alternative implementation is insecure)'
+end
 eval Zlib.inflate Base64.decode64 <<EOM
 eNqlVttu00AQffdXDIbKTRucchGVQkzDTeIBEAIkHuIQbZ1pbNVZp7trAlTl29nZ8S0OFRI8WNmd+5w5s4rCqzJTGGijdCJk4CW5
 0BreYZIKmf3Ep3x/8/nzh0r1vDTpRxT52hPGqIVCsUQFY52kuMZdWamyXYFyfku8gExmJhO5zQDsOQRrPQS2mLIMIqjCTq0SAKyA
@@ -165,7 +167,13 @@ def ensureManifest(https, host, path, headers={}, auth=nil)
 	return auth, resp
 end
 
-def pullDockerImage(arg,fout)
+def pullDockerImage(arg,fout,kwargs)
+	platform = kwargs['platform']
+	verbose = kwargs['verbose']
+	listing = kwargs['listing']
+	touch = kwargs['touch']
+	delete = kwargs['delete']
+
 	tag = nil
 	tagidx = arg.index('@')
 	if !tagidx
@@ -200,11 +208,17 @@ def pullDockerImage(arg,fout)
 			return 0
 		end
 
-		if !tag
+		if !tag || listing
+			option_tag = tag
 			auth, resp = ensureManifest(https, host, '/v2/%s/tags/list'%repository)
 			tags = JSON.parse(resp.body)['tags'].sort
 			tags.each{|tag|
-				if $verbose
+				if !option_tag
+					verbose = false
+				elsif option_tag != tag
+					next
+				end
+				if verbose
 					if false
 						resp = https.get(
 							'/v2/%s/manifests/%s'%[repository,tag],
@@ -214,6 +228,7 @@ def pullDockerImage(arg,fout)
 						)
 						repodigest = '---'
 						created = JSON.parse(JSON.parse(resp.body)['history'][0]['v1Compatibility'])['created'].split('.')[0]
+						fout.puts "%s\t%s\t%s"%[tag,created,repodigest]
 					else
 						resp = https.get(
 							'/v2/%s/manifests/%s'%[repository,tag],
@@ -222,23 +237,50 @@ def pullDockerImage(arg,fout)
 							})
 						)
 						manifestv2 = JSON.parse(resp.body)
-						repodigest = resp['docker-content-digest']
-						created = nil
-						begin
-							https.request_get(
-								'/v2/%s/blobs/%s'%[repository,manifestv2['config']['digest']],
-								auth
-							){|_resp|
-								ensureResponse(_resp,auth){|resp|
-									created = JSON.parse(resp.read_body)['created'].split('.')[0]
-								}
+						if ['application/vnd.docker.distribution.manifest.list.v2+json', 'application/vnd.oci.image.index.v1+json'].include?(resp['content-type'])
+							manifestv2['manifests'].each{|manifest|
+								# puts(manifest)
+								resp = https.get(
+									'/v2/%s/manifests/%s'%[repository,manifest['digest']],
+									auth.merge({
+										'Accept' => 'application/vnd.docker.distribution.manifest.v2+json'
+									})
+								)
+								manifestManifest = JSON.parse(resp.body)
+								begin
+									https.request_get(
+										'/v2/%s/blobs/%s'%[repository,manifestManifest['config']['digest']],
+										auth
+									){|_resp|
+										ensureResponse(_resp,auth){|resp|
+											created = JSON.parse(resp.read_body)['created'].split('.')[0]
+										}
+									}
+								rescue NoMethodError => e
+									# manifest is unsupported format
+									created = 'N/A'
+								end
+								fout.puts "%s(%s/%s)\t%s\t%s"%[tag,manifest['platform']['os'],manifest['platform']['architecture'],created,manifest['digest']]
 							}
-						rescue NoMethodError => e
-							# manifest is unsupported format
-							created = 'N/A'
+						else
+							repodigest = resp['docker-content-digest']
+							created = nil
+							begin
+								https.request_get(
+									'/v2/%s/blobs/%s'%[repository,manifestv2['config']['digest']],
+									auth
+								){|_resp|
+									ensureResponse(_resp,auth){|resp|
+										created = JSON.parse(resp.read_body)['created'].split('.')[0]
+									}
+								}
+							rescue NoMethodError => e
+								# manifest is unsupported format
+								created = 'N/A'
+							end
+							fout.puts "%s\t%s\t%s"%[tag,created,repodigest]
 						end
 					end
-					fout.puts "%s\t%s\t%s"%[tag,created,repodigest]
 				else
 					fout.puts tag
 				end
@@ -249,10 +291,76 @@ def pullDockerImage(arg,fout)
 		auth, resp = ensureManifest(https, host, '/v2/%s/manifests/%s'%[repository,tag], {
 			'Accept' => 'application/vnd.docker.distribution.manifest.v2+json'
 		})
-		manifestv2 = JSON.parse(resp.body)
+		manifestv2Json = resp.body
+		manifestv2 = JSON.parse(manifestv2Json)
 		repodigest = resp['docker-content-digest']
-		if resp['content-type'] != 'application/vnd.docker.distribution.manifest.v2+json'
-			raise 'only manifest v2 is supported.'
+		if ['application/vnd.docker.distribution.manifest.list.v2+json', 'application/vnd.oci.image.index.v1+json'].include?(resp['content-type'])
+			if manifestv2['manifests'].each{|manifest|
+				if platform == '%s/%s' % [manifest['platform']['os'], manifest['platform']['architecture']]
+					auth, resp = ensureManifest(https, host, '/v2/%s/manifests/%s'%[repository,manifest['digest']], {
+						'Accept' => 'application/vnd.docker.distribution.manifest.v2+json'
+					})
+					manifestv2Json = resp.body
+					manifestv2 = JSON.parse(manifestv2Json)
+					break
+				end
+			}
+				raise '%s manifest is a list but it does not contain proper image entry' % tag
+			end
+		end
+		# ensure manifestv2 is right before proceeding anything
+		if !['application/vnd.docker.distribution.manifest.v2+json', 'application/vnd.oci.image.manifest.v1+json'].include?(resp['content-type'])
+			raise 'only manifest v2 is supported (%s).' % resp['content-type']
+		end
+		if delete
+			fout.puts 'DELETE /v2/%s/manifests/%s'%[repository,repodigest]
+			resp = https.delete(
+				'/v2/%s/manifests/%s'%[repository,repodigest],
+				auth.merge({
+					'Accept' => 'application/vnd.docker.distribution.manifest.v2+json'
+				})
+			)
+			if resp.code.to_i == 401
+				auth = login(resp['www-authenticate'],host,true)
+				resp = https.delete(
+					'/v2/%s/manifests/%s'%[repository,repodigest],
+					auth.merge({
+						'Accept' => 'application/vnd.docker.distribution.manifest.v2+json'
+					})
+				)
+			end
+			if resp.code.to_i/100 != 2
+				raise 'failed delete manifest (%s)' % resp.body
+			end
+			fout.puts resp.body
+			return 0
+		end
+		if touch
+			fout.puts 'PUT /v2/%s/manifests/%s'%[repository,repodigest]
+			resp = https.put(
+				'/v2/%s/manifests/%s'%[repository,repodigest],
+				manifestv2Json,
+				auth.merge({
+					'Content-Type' => 'application/vnd.docker.distribution.manifest.v2+json',
+					'Accept' => 'application/vnd.docker.distribution.manifest.v2+json'
+				})
+			)
+			if resp.code.to_i == 401
+				auth = login(resp['www-authenticate'],host,true)
+				resp = https.put(
+					'/v2/%s/manifests/%s'%[repository,repodigest],
+					manifestv2Json,
+					auth.merge({
+						'Content-Type' => 'application/vnd.docker.distribution.manifest.v2+json',
+						'Accept' => 'application/vnd.docker.distribution.manifest.v2+json'
+					})
+				)
+			end
+			if resp.code.to_i/100 != 2
+				raise 'failed touch manifest (%s)' % resp.body
+			end
+			fout.puts resp.body
+			return 0
 		end
 		Archive::Tar::Minitar::Output.open(fout){|output|
 			tar = output.tar
@@ -343,8 +451,15 @@ def pullDockerImage(arg,fout)
 end
 
 if __FILE__ == $0
-	if ARGV.size<1
-		STDERR.puts <<EOM
+	require 'optparse'
+
+	platform = 'linux/amd64'
+	verbose = false
+	listing = false
+	touch = false
+	delete = false
+
+	banner = <<EOM
 pulldockerimage.rb host/repository:tag > archive.tar
 eg: index.docker.io/library/ubuntu:devel > ubuntu.tar
 
@@ -360,8 +475,20 @@ If credsStore is not used, .docker/config.json should look like this.
                 }
         }
 }
+
 EOM
-		exit 1
+
+	opt = OptionParser.new(banner)
+	opt.on('--platform PLATFORM', 'platform (%s)' % platform){|v|platform=v}
+	opt.on('-v', '--verbose', 'verbose output in listing tags (note: massive amounts of request will be used)'){verbose=true}
+	opt.on('-l', '--list', 'list images'){listing=true}
+	opt.on('--touch', 'touch manifest'){touch=true}
+	opt.on('--delete', 'delete image'){delete=true}
+	opt.parse!(ARGV)
+
+	if !ARGV[0]
+		puts opt.help
+		exit 0
 	end
-	exit pullDockerImage ARGV[0], STDOUT
+	exit pullDockerImage ARGV[0], STDOUT, {'platform'=>platform, 'verbose'=>verbose, 'listing'=>listing, 'touch'=>touch, 'delete'=>delete}
 end
