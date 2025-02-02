@@ -251,13 +251,13 @@ def pullDockerImage(arg,fout,platform=None,verbose=False,listing=False,touch=Fal
             fout.write(b'\n')
             return 0
         if touch:
-            fout.write(('PUT /v2/%s/manifests/%s\n'%(repository,repodigest)).encode('utf-8'))
-            https.request('PUT','/v2/%s/manifests/%s'%(repository,repodigest),manifestv2Json,dict(auth,**{'Content-Type':'application/vnd.docker.distribution.manifest.v2+json','Accept':'application/vnd.docker.distribution.manifest.v2+json'}))
+            fout.write(('PUT /v2/%s/manifests/%s\n'%(repository,tag)).encode('utf-8'))
+            https.request('PUT','/v2/%s/manifests/%s'%(repository,tag),manifestv2Json,dict(auth,**{'Content-Type':'application/vnd.docker.distribution.manifest.v2+json','Accept':'application/vnd.docker.distribution.manifest.v2+json'}))
             resp = https.getresponse()
             if resp.status == 401:
                 resp.read()
                 auth = login(resp.getheader('www-authenticate'),host,True)
-                https.request('PUT','/v2/%s/manifests/%s'%(repository,repodigest),manifestv2Json,dict(auth,**{'Content-Type':'application/vnd.docker.distribution.manifest.v2+json','Accept':'application/vnd.docker.distribution.manifest.v2+json'}))
+                https.request('PUT','/v2/%s/manifests/%s'%(repository,tag),manifestv2Json,dict(auth,**{'Content-Type':'application/vnd.docker.distribution.manifest.v2+json','Accept':'application/vnd.docker.distribution.manifest.v2+json'}))
                 resp = https.getresponse()
             if int(resp.status)//100 != 2:
                 raise Exception('failed touch manifest (%r)' % resp.read())

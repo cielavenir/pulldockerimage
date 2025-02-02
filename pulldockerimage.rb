@@ -336,9 +336,9 @@ def pullDockerImage(arg,fout,kwargs)
 			return 0
 		end
 		if touch
-			fout.puts 'PUT /v2/%s/manifests/%s'%[repository,repodigest]
+			fout.puts 'PUT /v2/%s/manifests/%s'%[repository,tag]
 			resp = https.put(
-				'/v2/%s/manifests/%s'%[repository,repodigest],
+				'/v2/%s/manifests/%s'%[repository,tag],
 				manifestv2Json,
 				auth.merge({
 					'Content-Type' => 'application/vnd.docker.distribution.manifest.v2+json',
@@ -348,7 +348,7 @@ def pullDockerImage(arg,fout,kwargs)
 			if resp.code.to_i == 401
 				auth = login(resp['www-authenticate'],host,true)
 				resp = https.put(
-					'/v2/%s/manifests/%s'%[repository,repodigest],
+					'/v2/%s/manifests/%s'%[repository,tag],
 					manifestv2Json,
 					auth.merge({
 						'Content-Type' => 'application/vnd.docker.distribution.manifest.v2+json',
