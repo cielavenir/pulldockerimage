@@ -28,7 +28,7 @@ else:
     BytesIO = StringIO
     binstdout = sys.stdout
 
-'''
+r'''
 try:
     import ujson as json  # print(ujson.dumps(['a/b'])) => ["a\/b"], weird backslash
 except ImportError:
