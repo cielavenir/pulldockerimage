@@ -14,7 +14,7 @@ require 'digest/sha2'
 require 'base64'
 require 'uri'
 require 'zlib'
-require 'archive/tar/minitar' # gem install minitar
+require 'minitar' # gem install minitar
 
 begin
 require 'mechanize'
@@ -233,7 +233,7 @@ def pullDockerImage(arg,fout,kwargs)
 						resp = https.get(
 							'/v2/%s/manifests/%s'%[repository,tag],
 							auth.merge({
-								'Accept' => 'application/vnd.docker.distribution.manifest.v2+json'
+								'Accept' => 'application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json'
 							})
 						)
 						manifestv2 = JSON.parse(resp.body)
@@ -243,7 +243,7 @@ def pullDockerImage(arg,fout,kwargs)
 								resp = https.get(
 									'/v2/%s/manifests/%s'%[repository,manifest['digest']],
 									auth.merge({
-										'Accept' => 'application/vnd.docker.distribution.manifest.v2+json'
+										'Accept' => 'application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json'
 									})
 								)
 								manifestManifest = JSON.parse(resp.body)
@@ -289,7 +289,7 @@ def pullDockerImage(arg,fout,kwargs)
 		end
 
 		auth, resp = ensureManifest(https, host, '/v2/%s/manifests/%s'%[repository,tag], {
-			'Accept' => 'application/vnd.docker.distribution.manifest.v2+json'
+			'Accept' => 'application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json'
 		})
 		manifestv2Json = resp.body
 		manifestv2 = JSON.parse(manifestv2Json)
@@ -298,7 +298,7 @@ def pullDockerImage(arg,fout,kwargs)
 			if manifestv2['manifests'].each{|manifest|
 				if platform == '%s/%s' % [manifest['platform']['os'], manifest['platform']['architecture']]
 					auth, resp = ensureManifest(https, host, '/v2/%s/manifests/%s'%[repository,manifest['digest']], {
-						'Accept' => 'application/vnd.docker.distribution.manifest.v2+json'
+						'Accept' => 'application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json'
 					})
 					manifestv2Json = resp.body
 					manifestv2 = JSON.parse(manifestv2Json)
@@ -317,7 +317,7 @@ def pullDockerImage(arg,fout,kwargs)
 			resp = https.delete(
 				'/v2/%s/manifests/%s'%[repository,repodigest],
 				auth.merge({
-					'Accept' => 'application/vnd.docker.distribution.manifest.v2+json'
+					'Accept' => 'application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json'
 				})
 			)
 			if resp.code.to_i == 401
@@ -325,7 +325,7 @@ def pullDockerImage(arg,fout,kwargs)
 				resp = https.delete(
 					'/v2/%s/manifests/%s'%[repository,repodigest],
 					auth.merge({
-						'Accept' => 'application/vnd.docker.distribution.manifest.v2+json'
+						'Accept' => 'application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json'
 					})
 				)
 			end
@@ -342,7 +342,7 @@ def pullDockerImage(arg,fout,kwargs)
 				manifestv2Json,
 				auth.merge({
 					'Content-Type' => 'application/vnd.docker.distribution.manifest.v2+json',
-					'Accept' => 'application/vnd.docker.distribution.manifest.v2+json'
+					'Accept' => 'application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json'
 				})
 			)
 			if resp.code.to_i == 401
@@ -352,7 +352,7 @@ def pullDockerImage(arg,fout,kwargs)
 					manifestv2Json,
 					auth.merge({
 						'Content-Type' => 'application/vnd.docker.distribution.manifest.v2+json',
-						'Accept' => 'application/vnd.docker.distribution.manifest.v2+json'
+						'Accept' => 'application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json'
 					})
 				)
 			end
@@ -362,7 +362,7 @@ def pullDockerImage(arg,fout,kwargs)
 			fout.puts resp.body
 			return 0
 		end
-		Archive::Tar::Minitar::Output.open(fout){|output|
+		Minitar::Output.open(fout){|output|
 			tar = output.tar
 			https.request_get(
 				'/v2/%s/blobs/%s'%[repository,manifestv2['config']['digest']],
