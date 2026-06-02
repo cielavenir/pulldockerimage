@@ -83,29 +83,37 @@ def getCredential(host, b64=true)
 	end
 end
 
-def ensureResponse(resp,auth_)
-	auth = auth_.dup
-	if ![301,302,307,308].include?(resp.code.to_i)
-		yield resp
-		return
-	end
-	resp.read_body
-	loop{
-		location = resp['location'].chomp
-		locationurl = URI.parse(location)
-		auth.delete('Authorization') if (locationurl.query||'').split('&').any?{|e|
-			['X-Amz-Algorithm', 'Signature'].include? e.split('=')[0]
-		}
-		https = Net::HTTP.new(locationurl.host,locationurl.port)
-		https.use_ssl = true
-		https.verify_mode = OpenSSL::SSL::VERIFY_PEER
-		https.start{
-			https.request_get(locationurl.path+'?'+locationurl.query,auth){|resp|
-				if ![301,302,307,308].include?(resp.code.to_i)
-					yield resp
-					return
-				end
-				resp.read_body
+def ensureResponse(https,method,path,auth_)
+	https.request(Net::HTTP.const_get(method.capitalize).new(path, auth_)){|resp|
+		auth = auth_.dup
+		if [4, 5].include?(resp.code.to_i/100)
+			raise '%s raised %s:\n%s' % [path, resp.code.to_i, resp.read_body]
+		end
+		if ![301,302,307,308].include?(resp.code.to_i)
+			yield resp
+			return
+		end
+		resp.read_body
+		loop{
+			location = resp['location'].chomp
+			locationurl = URI.parse(location)
+			auth.delete('Authorization') if (locationurl.query||'').split('&').any?{|e|
+				['X-Amz-Algorithm', 'Signature'].include? e.split('=')[0]
+			}
+			https = Net::HTTP.new(locationurl.host,locationurl.port)
+			https.use_ssl = true
+			https.verify_mode = OpenSSL::SSL::VERIFY_PEER
+			https.start{
+				https.request(Net::HTTP.const_get(method.capitalize).new(locationurl.path+'?'+locationurl.query,auth)){|resp|
+					if [4, 5].include?(resp.code.to_i/100)
+						raise '%s raised %s:\n%s' % [location, resp.code.to_i, resp.read_body]
+					end
+					if ![301,302,307,308].include?(resp.code.to_i)
+						yield resp
+						return
+					end
+					resp.read_body
+				}
 			}
 		}
 	}
@@ -173,6 +181,7 @@ def pullDockerImage(arg,fout,kwargs)
 	listing = kwargs['listing']
 	touch = kwargs['touch']
 	delete = kwargs['delete']
+	check = kwargs['check']
 
 	tag = nil
 	tagidx = arg.index('@')
@@ -248,13 +257,8 @@ def pullDockerImage(arg,fout,kwargs)
 								)
 								manifestManifest = JSON.parse(resp.body)
 								begin
-									https.request_get(
-										'/v2/%s/blobs/%s'%[repository,manifestManifest['config']['digest']],
-										auth
-									){|_resp|
-										ensureResponse(_resp,auth){|resp|
-											created = JSON.parse(resp.read_body)['created'].split('.')[0]
-										}
+									ensureResponse(https,'GET','/v2/%s/blobs/%s'%[repository,manifestManifest['config']['digest']],auth){|resp|
+										created = JSON.parse(resp.read_body)['created'].split('.')[0]
 									}
 								rescue NoMethodError => e
 									# manifest is unsupported format
@@ -266,13 +270,8 @@ def pullDockerImage(arg,fout,kwargs)
 							repodigest = resp['docker-content-digest']
 							created = nil
 							begin
-								https.request_get(
-									'/v2/%s/blobs/%s'%[repository,manifestv2['config']['digest']],
-									auth
-								){|_resp|
-									ensureResponse(_resp,auth){|resp|
-										created = JSON.parse(resp.read_body)['created'].split('.')[0]
-									}
+								ensureResponse(_resp,'GET','/v2/%s/blobs/%s'%[repository,manifestv2['config']['digest']],auth){|resp|
+									created = JSON.parse(resp.read_body)['created'].split('.')[0]
 								}
 							rescue NoMethodError => e
 								# manifest is unsupported format
@@ -362,16 +361,25 @@ def pullDockerImage(arg,fout,kwargs)
 			fout.puts resp.body
 			return 0
 		end
+		if check
+			layerId = ''
+			manifestv2['layers'].each{|layer|
+				layerDigest = layer['digest']
+				parentId = layerId
+				layerId = Digest::SHA256.hexdigest(parentId+"\n"+layerDigest+"\n")
+				STDERR.puts '%s (%s)'%[layerId,layerDigest]
+				ensureResponse(https,'HEAD','/v2/%s/blobs/%s'%[repository,layerDigest],auth){|resp|
+					resp.read_body
+				}
+				# done without exception
+			}
+			return 0
+		end
 		Minitar::Output.open(fout){|output|
 			tar = output.tar
-			https.request_get(
-				'/v2/%s/blobs/%s'%[repository,manifestv2['config']['digest']],
-				auth
-			){|_resp|
-				ensureResponse(_resp,auth){|resp|
-					#File.write(manifestv2['config']['digest'].split(':')[1]+'.json',resp.read_body)
-					tar.add_file_simple(manifestv2['config']['digest'].split(':')[1]+'.json',{:data=>resp.read_body})
-				}
+			ensureResponse(https,'GET','/v2/%s/blobs/%s'%[repository,manifestv2['config']['digest']],auth){|resp|
+				#File.write(manifestv2['config']['digest'].split(':')[1]+'.json',resp.read_body)
+				tar.add_file_simple(manifestv2['config']['digest'].split(':')[1]+'.json',{:data=>resp.read_body})
 			}
 			manifestjson = {
 				'Config' => manifestv2['config']['digest'].split(':')[1]+'.json',
@@ -424,15 +432,10 @@ def pullDockerImage(arg,fout,kwargs)
 					})
 				})
 
-				https.request_get(
-					'/v2/%s/blobs/%s'%[repository,layerDigest],
-					auth
-				){|_resp|
-					ensureResponse(_resp,auth){|resp|
-						#File.open(layerId+'/layer.tar','w'){|io|
-						tar.add_file_simple(layerId+'/layer.tar',{:size=>resp['content-length'].to_i}){|io|
-							resp.read_body{|body|io.write body}
-						}
+				ensureResponse(https,'GET','/v2/%s/blobs/%s'%[repository,layerDigest],auth){|resp|
+					#File.open(layerId+'/layer.tar','w'){|io|
+					tar.add_file_simple(layerId+'/layer.tar',{:size=>resp['content-length'].to_i}){|io|
+						resp.read_body{|body|io.write body}
 					}
 				}
 			}
@@ -458,6 +461,7 @@ if __FILE__ == $0
 	listing = false
 	touch = false
 	delete = false
+	check = false
 
 	banner = <<EOM
 pulldockerimage.rb host/repository:tag > archive.tar
@@ -484,11 +488,12 @@ EOM
 	opt.on('-l', '--list', 'list images'){listing=true}
 	opt.on('--touch', 'touch manifest'){touch=true}
 	opt.on('--delete', 'delete image'){delete=true}
+	opt.on('--check', 'check image'){check=true}
 	opt.parse!(ARGV)
 
 	if !ARGV[0]
 		puts opt.help
 		exit 0
 	end
-	exit pullDockerImage ARGV[0], STDOUT, {'platform'=>platform, 'verbose'=>verbose, 'listing'=>listing, 'touch'=>touch, 'delete'=>delete}
+	exit pullDockerImage ARGV[0], STDOUT, {'platform'=>platform, 'verbose'=>verbose, 'listing'=>listing, 'touch'=>touch, 'delete'=>delete, 'check'=>check}
 end

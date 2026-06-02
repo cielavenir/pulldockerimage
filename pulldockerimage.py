@@ -74,9 +74,12 @@ def makeTarInfo(**kwargs):
     return info
 
 @contextmanager
-def ensureResponse(https,auth_):
+def ensureResponse(https,method,path,auth_):
+    https.request(method,path,None,auth_)
     auth = dict(auth_)
     resp = https.getresponse()
+    if int(resp.status)//100 in (4, 5):
+        raise RuntimeError('%s raised %s:\n%s' % (path, resp.status, resp.read()))
     if resp.status not in [301,302,307,308]:
         yield resp
         return
@@ -87,8 +90,10 @@ def ensureResponse(https,auth_):
         if any(e.split('=')[0] in ['X-Amz-Algorithm', 'Signature'] for e in (locationurl.query or '').split('&')):
             auth.pop('Authorization', None)
         with closing(httplib.HTTPSConnection(locationurl.netloc)) as https:
-            https.request('GET',locationurl.path+'?'+locationurl.query,None,auth)
+            https.request(method,locationurl.path+'?'+locationurl.query,None,auth)
             resp = https.getresponse()
+            if int(resp.status)//100 in (4, 5):
+                raise RuntimeError('%s raised %s:\n%s' % (location, resp.status, resp.read()))
             if resp.status not in [301,302,307,308]:
                 yield resp
                 return
@@ -144,7 +149,7 @@ def ensureManifest(https, host, path, headers={}, auth=None):
         raise Exception('failed to retrieve manifest (%d).'%resp.status)
     return auth, resp
 
-def pullDockerImage(arg,fout,platform=None,verbose=False,listing=False,touch=False,delete=False):
+def pullDockerImage(arg,fout,platform=None,verbose=False,listing=False,touch=False,delete=False,check=False):
     tag = None
     tagidx = arg.find('@')
     if tagidx < 0:
@@ -198,8 +203,7 @@ def pullDockerImage(arg,fout,platform=None,verbose=False,listing=False,touch=Fal
                                 resp = https.getresponse()
                                 manifestManifest = json.load(resp)
                                 try:
-                                    https.request('GET','/v2/%s/blobs/%s'%(repository,manifestManifest['config']['digest']),None,auth)
-                                    with ensureResponse(https,auth) as resp:
+                                    with ensureResponse(https,'GET','/v2/%s/blobs/%s'%(repository,manifestManifest['config']['digest']),auth) as resp:
                                         data = json.load(resp)
                                         created = data['created'].split('.')[0]
                                 except KeyError as e:
@@ -209,8 +213,7 @@ def pullDockerImage(arg,fout,platform=None,verbose=False,listing=False,touch=Fal
                         else:
                             repodigest = resp.getheader('docker-content-digest') or '---'
                             try:
-                                https.request('GET','/v2/%s/blobs/%s'%(repository,manifestv2['config']['digest']),None,auth)
-                                with ensureResponse(https,auth) as resp:
+                                with ensureResponse(https,'GET','/v2/%s/blobs/%s'%(repository,manifestv2['config']['digest']),auth) as resp:
                                     created = json.load(resp)['created'].split('.')[0]
                             except KeyError as e:
                                 # manifest is unsupported format
@@ -264,9 +267,19 @@ def pullDockerImage(arg,fout,platform=None,verbose=False,listing=False,touch=Fal
             fout.write(resp.read())
             fout.write(b'\n')
             return 0
+        if check:
+            layerId = ''
+            for layer in manifestv2['layers']:
+                layerDigest = layer['digest']
+                parentId = layerId
+                layerId = hashlib.sha256((parentId+'\n'+layerDigest+'\n').encode('utf-8')).hexdigest()
+                sys.stderr.write('%s (%s)\n'%(layerId,layerDigest))
+                with ensureResponse(https,'HEAD','/v2/%s/blobs/%s'%(repository,layerDigest),auth) as resp:
+                    resp.read()
+                # done without exception
+            return 0
         with tarfile.open(mode='w|',fileobj=fout) as tar:
-            https.request('GET','/v2/%s/blobs/%s'%(repository,manifestv2['config']['digest']),None,auth)
-            with ensureResponse(https,auth) as resp:
+            with ensureResponse(https,'GET','/v2/%s/blobs/%s'%(repository,manifestv2['config']['digest']),auth) as resp:
                 tar.addfile(makeTarInfo(
                     name=manifestv2['config']['digest'].split(':')[1]+'.json',
                     size=int(resp.getheader('content-length'))
@@ -316,8 +329,7 @@ def pullDockerImage(arg,fout,platform=None,verbose=False,listing=False,touch=Fal
                     }
                 })
                 tar.addfile(makeTarInfo(name=layerId+'/json',data=jsonstr),BytesIO(jsonstr.encode('utf-8')))
-                https.request('GET','/v2/%s/blobs/%s'%(repository,layerDigest),None,auth)
-                with ensureResponse(https,auth) as resp:
+                with ensureResponse(https,'GET','/v2/%s/blobs/%s'%(repository,layerDigest),auth) as resp:
                     tar.addfile(makeTarInfo(
                         name=layerId+'/layer.tar',
                         size=int(resp.getheader('content-length'))
@@ -362,6 +374,7 @@ If credsStore is not used, .docker/config.json should look like this.
     parser.add_argument('-l','--list',action='store_true',help='list images')
     parser.add_argument('--touch',action='store_true',help='touch manifest')
     parser.add_argument('--delete',action='store_true',help='delete image')
+    parser.add_argument('--check',action='store_true',help='check image')
     parser.add_argument('image_tag')
     args = parser.parse_args(sys.argv[1:])
-    exit(pullDockerImage(args.image_tag,binstdout,platform=args.platform,verbose=args.verbose,listing=args.list,touch=args.touch,delete=args.delete))
+    exit(pullDockerImage(args.image_tag,binstdout,platform=args.platform,verbose=args.verbose,listing=args.list,touch=args.touch,delete=args.delete,check=args.check))
