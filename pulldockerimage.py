@@ -344,7 +344,7 @@ def pullDockerImage(arg,fout,platform=None,verbose=False,listing=False,touch=Fal
 
     return 0
 
-if __name__ == '__main__':
+def main():
     import argparse
     description = '''
 pulldockerimage.py host/repository:tag > archive.tar
@@ -377,4 +377,7 @@ If credsStore is not used, .docker/config.json should look like this.
     parser.add_argument('--check',action='store_true',help='check image')
     parser.add_argument('image_tag')
     args = parser.parse_args(sys.argv[1:])
-    exit(pullDockerImage(args.image_tag,binstdout,platform=args.platform,verbose=args.verbose,listing=args.list,touch=args.touch,delete=args.delete,check=args.check))
+    return pullDockerImage(args.image_tag,binstdout,platform=args.platform,verbose=args.verbose,listing=args.list,touch=args.touch,delete=args.delete,check=args.check)
+
+if __name__ == '__main__':
+    exit(main())

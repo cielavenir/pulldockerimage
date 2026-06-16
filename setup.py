@@ -13,6 +13,11 @@ setup(
     author='cielavenir',
     author_email='cielartisan@gmail.com',
     py_modules=['pulldockerimage'],
+    # entry_points={
+    #     'console_scripts': [
+    #         'pulldockerimage=pulldockerimage:main',
+    #     ],
+    # },
     zip_safe=False,
     # include_package_data=True,
     platforms='any',

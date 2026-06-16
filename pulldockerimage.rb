@@ -453,7 +453,7 @@ def pullDockerImage(arg,fout,kwargs)
 	return 0
 end
 
-if __FILE__ == $0
+def main
 	require 'optparse'
 
 	platform = 'linux/amd64'
@@ -495,5 +495,9 @@ EOM
 		puts opt.help
 		exit 0
 	end
-	exit pullDockerImage ARGV[0], STDOUT, {'platform'=>platform, 'verbose'=>verbose, 'listing'=>listing, 'touch'=>touch, 'delete'=>delete, 'check'=>check}
+	return pullDockerImage ARGV[0], STDOUT, {'platform'=>platform, 'verbose'=>verbose, 'listing'=>listing, 'touch'=>touch, 'delete'=>delete, 'check'=>check}
+end
+
+if __FILE__ == $0
+	exit main
 end
