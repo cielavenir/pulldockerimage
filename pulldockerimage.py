@@ -239,6 +239,7 @@ def pullDockerImage(arg,fout,platform=None,verbose=False,listing=False,touch=Fal
         # ensure manifestv2 is right before proceeding anything
         if resp.getheader('content-type') not in ['application/vnd.docker.distribution.manifest.v2+json', 'application/vnd.oci.image.manifest.v1+json']:
             raise Exception('only manifest v2 is supported (%s).' % resp.getheader('content-type'))
+        mediaType = manifestv2.get('mediaType', 'application/vnd.docker.distribution.manifest.v2+json')
         if delete:
             fout.write(('DELETE /v2/%s/manifests/%s\n'%(repository,repodigest)).encode('utf-8'))
             https.request('DELETE','/v2/%s/manifests/%s'%(repository,repodigest),None,dict(auth,Accept='application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json'))
@@ -255,12 +256,12 @@ def pullDockerImage(arg,fout,platform=None,verbose=False,listing=False,touch=Fal
             return 0
         if touch:
             fout.write(('PUT /v2/%s/manifests/%s\n'%(repository,tag)).encode('utf-8'))
-            https.request('PUT','/v2/%s/manifests/%s'%(repository,tag),manifestv2Json,dict(auth,**{'Content-Type':'application/vnd.docker.distribution.manifest.v2+json','Accept':'application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json'}))
+            https.request('PUT','/v2/%s/manifests/%s'%(repository,tag),manifestv2Json,dict(auth,**{'Content-Type':mediaType,'Accept':'application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json'}))
             resp = https.getresponse()
             if resp.status == 401:
                 resp.read()
                 auth = login(resp.getheader('www-authenticate'),host,True)
-                https.request('PUT','/v2/%s/manifests/%s'%(repository,tag),manifestv2Json,dict(auth,**{'Content-Type':'application/vnd.docker.distribution.manifest.v2+json','Accept':'application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json'}))
+                https.request('PUT','/v2/%s/manifests/%s'%(repository,tag),manifestv2Json,dict(auth,**{'Content-Type':mediaType,'Accept':'application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json'}))
                 resp = https.getresponse()
             if int(resp.status)//100 != 2:
                 raise Exception('failed touch manifest (%r)' % resp.read())

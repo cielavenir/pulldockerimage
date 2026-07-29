@@ -311,6 +311,7 @@ def pullDockerImage(arg,fout,kwargs)
 		if !['application/vnd.docker.distribution.manifest.v2+json', 'application/vnd.oci.image.manifest.v1+json'].include?(resp['content-type'])
 			raise 'only manifest v2 is supported (%s).' % resp['content-type']
 		end
+		mediaType = manifestv2['mediaType'] || 'application/vnd.docker.distribution.manifest.v2+json'
 		if delete
 			fout.puts 'DELETE /v2/%s/manifests/%s'%[repository,repodigest]
 			resp = https.delete(
@@ -340,7 +341,7 @@ def pullDockerImage(arg,fout,kwargs)
 				'/v2/%s/manifests/%s'%[repository,tag],
 				manifestv2Json,
 				auth.merge({
-					'Content-Type' => 'application/vnd.docker.distribution.manifest.v2+json',
+					'Content-Type' => mediaType,
 					'Accept' => 'application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json'
 				})
 			)
@@ -350,7 +351,7 @@ def pullDockerImage(arg,fout,kwargs)
 					'/v2/%s/manifests/%s'%[repository,tag],
 					manifestv2Json,
 					auth.merge({
-						'Content-Type' => 'application/vnd.docker.distribution.manifest.v2+json',
+						'Content-Type' => mediaType,
 						'Accept' => 'application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json'
 					})
 				)
