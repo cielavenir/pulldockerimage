@@ -99,22 +99,35 @@ def ensureResponse(https,method,path,auth_):
                 return
             resp.read()
 
-def login(wwwAuth,host=None,forceCredential=False):
+def login(wwwAuth,host=None,forceCredential=False,scope=None):
     authresp = wwwAuth
     # print(wwwAuth)
+    if authresp.split(' ',1)[0].lower() != 'bearer':
+        # harbor answers an unauthorized request that already carries a bearer token
+        # with `Basic realm="harbor"`, which has no token endpoint to parse. Probe
+        # /v2/ unauthenticated to recover the Bearer challenge (realm + service; it
+        # carries no scope, hence the caller-provided fallback below).
+        with closing(httplib.HTTPSConnection(host)) as probehttps:
+            probehttps.request('GET','/v2/',None,{})
+            proberesp = probehttps.getresponse()
+            proberesp.read()
+            authresp = proberesp.getheader('www-authenticate')
     realm = parse_keqv_list(parse_http_list(authresp[authresp.index(' ')+1:]))
+    scope = realm.get('scope',scope)
+    if scope is None:
+        raise Exception('auth challenge (%s) has no scope and the caller provided none.'%authresp)
     realmurl = urlparse(realm['realm'])
     credentialHost = host if host is not None else realmurl.netloc
     with closing(httplib.HTTPSConnection(realmurl.netloc)) as authhttps:
         #authhttps.request('GET','%s?scope=repository:%s:pull&service=%s'%(realmurl.path,repository,realm['service']),None)
-        authhttps.request('GET','%s?scope=%s&service=%s'%(realmurl.path,realm['scope'],realm['service']),None)
+        authhttps.request('GET','%s?scope=%s&service=%s'%(realmurl.path,scope,realm['service']),None)
         resp = authhttps.getresponse()
         if forceCredential or resp.status == 401 or resp.status == 403:
             resp.read()
             basic = getCredential(credentialHost)
             if basic:
                 account = base64.b64decode(basic).decode('utf-8').split(':')[0]
-                authhttps.request('GET','%s?account=%s&scope=%s&service=%s'%(realmurl.path,account,realm['scope'],realm['service']),None,{'Authorization':'Basic '+basic})
+                authhttps.request('GET','%s?account=%s&scope=%s&service=%s'%(realmurl.path,account,scope,realm['service']),None,{'Authorization':'Basic '+basic})
                 resp = authhttps.getresponse()
                 if resp.status == 401:
                     raise Exception('Credential is wrong (used "%s"). Please relogin to %s.'%(account,credentialHost))
@@ -128,17 +141,19 @@ def login(wwwAuth,host=None,forceCredential=False):
 def ensureManifest(https, host, path, headers={}, auth=None):
     if auth is None:
         auth = {}
+    # /v2/<repository>/manifests/<tag> - the pull scope for login() fallback.
+    pullscope = 'repository:%s:pull'%path[len('/v2/'):path.rindex('/manifests/')]
     https.request('GET',path,None,dict(auth,**headers))
     resp = https.getresponse()
     if resp.status == 401:
         resp.read()
-        auth = login(resp.getheader('www-authenticate'),host,False)
+        auth = login(resp.getheader('www-authenticate'),host,False,scope=pullscope)
         https.request('GET',path,None,dict(auth,**headers))
         resp = https.getresponse()
         if resp.status == 401:
             sys.stderr.write('auth failed; probably got token for public image, forcing login to enter private image mode.\n')
             resp.read()
-            auth = login(resp.getheader('www-authenticate'),host,True)
+            auth = login(resp.getheader('www-authenticate'),host,True,scope=pullscope)
             https.request('GET',path,None,dict(auth,**headers))
             resp = https.getresponse()
     # if resp.status == 404:
@@ -246,7 +261,7 @@ def pullDockerImage(arg,fout,platform=None,verbose=False,listing=False,touch=Fal
             resp = https.getresponse()
             if resp.status == 401:
                 resp.read()
-                auth = login(resp.getheader('www-authenticate'),host,True)
+                auth = login(resp.getheader('www-authenticate'),host,True,scope='repository:%s:pull,push,delete'%repository)
                 https.request('DELETE','/v2/%s/manifests/%s'%(repository,repodigest),None,dict(auth,Accept='application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json'))
                 resp = https.getresponse()
             if int(resp.status)//100 != 2:
@@ -260,7 +275,7 @@ def pullDockerImage(arg,fout,platform=None,verbose=False,listing=False,touch=Fal
             resp = https.getresponse()
             if resp.status == 401:
                 resp.read()
-                auth = login(resp.getheader('www-authenticate'),host,True)
+                auth = login(resp.getheader('www-authenticate'),host,True,scope='repository:%s:pull,push'%repository)
                 https.request('PUT','/v2/%s/manifests/%s'%(repository,tag),manifestv2Json,dict(auth,**{'Content-Type':mediaType,'Accept':'application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json'}))
                 resp = https.getresponse()
             if int(resp.status)//100 != 2:
