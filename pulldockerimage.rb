@@ -162,6 +162,8 @@ def ensureManifest(https, host, path, headers={}, auth=nil)
 		resp = https.get(path,auth.merge(headers))
 		if resp.code.to_i == 401
 			STDERR.puts 'auth failed; probably got token for public image, forcing login to enter private image mode.'
+			# some repositories returns invalid realm for unusable token; need to resend with empty auth
+			resp = https.get(path,{}.merge(headers))
 			auth = login(resp['www-authenticate'],host,true)
 			resp = https.get(path,auth.merge(headers))
 		end
