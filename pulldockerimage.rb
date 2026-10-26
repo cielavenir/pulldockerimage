@@ -45,6 +45,8 @@ l6q7Cy1cTG/+XJn1BarvNwSfzCQ=
 EOM
 end
 
+IMAGE_MANIFEST_TYPE = 'application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json'
+
 def getCredential(host, b64=true)
 	fname = ENV['HOME']+'/.docker/config.json'
 	return nil if !File.file?(fname)
@@ -254,7 +256,7 @@ def pullDockerImage(arg,fout,kwargs)
 						resp = https.get(
 							'/v2/%s/manifests/%s'%[repository,tag],
 							auth.merge({
-								'Accept' => 'application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json'
+								'Accept' => IMAGE_MANIFEST_TYPE
 							})
 						)
 						manifestv2 = JSON.parse(resp.body)
@@ -300,7 +302,7 @@ def pullDockerImage(arg,fout,kwargs)
 		end
 
 		auth, resp = ensureManifest(https, host, '/v2/%s/manifests/%s'%[repository,tag], {
-			'Accept' => 'application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json'
+			'Accept' => IMAGE_MANIFEST_TYPE
 		})
 		manifestv2Json = resp.body
 		manifestv2 = JSON.parse(manifestv2Json)
@@ -329,7 +331,7 @@ def pullDockerImage(arg,fout,kwargs)
 			resp = https.delete(
 				'/v2/%s/manifests/%s'%[repository,repodigest],
 				auth.merge({
-					'Accept' => 'application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json'
+					'Accept' => IMAGE_MANIFEST_TYPE
 				})
 			)
 			if resp.code.to_i == 401
@@ -337,7 +339,7 @@ def pullDockerImage(arg,fout,kwargs)
 				resp = https.delete(
 					'/v2/%s/manifests/%s'%[repository,repodigest],
 					auth.merge({
-						'Accept' => 'application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json'
+						'Accept' => IMAGE_MANIFEST_TYPE
 					})
 				)
 			end
@@ -354,7 +356,7 @@ def pullDockerImage(arg,fout,kwargs)
 				manifestv2Json,
 				auth.merge({
 					'Content-Type' => mediaType,
-					'Accept' => 'application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json'
+					'Accept' => IMAGE_MANIFEST_TYPE
 				})
 			)
 			if resp.code.to_i == 401
@@ -364,7 +366,7 @@ def pullDockerImage(arg,fout,kwargs)
 					manifestv2Json,
 					auth.merge({
 						'Content-Type' => mediaType,
-						'Accept' => 'application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json'
+						'Accept' => IMAGE_MANIFEST_TYPE
 					})
 				)
 			end
