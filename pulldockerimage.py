@@ -110,7 +110,7 @@ def login(wwwAuth,host,forceCredential=False):
         if basic:
             return {'Authorization':'Basic '+basic}
         else:
-            raise Exception('`docker login %s` is required.'%(credentialHost))
+            raise Exception('`docker login %s` is required.'%(host))
     elif scheme.lower() == 'bearer':
         realm = parse_keqv_list(parse_http_list(authresp[authresp.index(' ')+1:]))
         realmurl = urlparse(realm['realm'])
