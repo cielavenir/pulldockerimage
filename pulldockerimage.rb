@@ -132,6 +132,7 @@ def login(wwwAuth,host,forceCredential=false)
 	elsif parser.scheme.downcase == 'bearer'
 		uri = URI.parse(parser.params['realm'])
 		credentialHost = host  # || uri.host
+		raise if !uri.host || uri.host.size == 0
 		authhttps = Net::HTTP.new(uri.host,uri.port)
 		authhttps.use_ssl = true
 		authhttps.verify_mode = OpenSSL::SSL::VERIFY_PEER

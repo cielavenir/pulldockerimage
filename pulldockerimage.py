@@ -113,6 +113,7 @@ def login(wwwAuth,host,forceCredential=False):
         realm = parse_keqv_list(parse_http_list(authresp[authresp.index(' ')+1:]))
         realmurl = urlparse(realm['realm'])
         credentialHost = host   # if host is not None else realmurl.netloc
+        assert realmurl.netloc is not None and len(realmurl.netloc) > 0
         with closing(httplib.HTTPSConnection(realmurl.netloc)) as authhttps:
             #authhttps.request('GET','%s?scope=repository:%s:pull&service=%s'%(realmurl.path,repository,realm['service']),None)
             authhttps.request('GET','%s?scope=%s&service=%s'%(realmurl.path,realm['scope'],realm['service']),None)
