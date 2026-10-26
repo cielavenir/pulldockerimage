@@ -119,37 +119,48 @@ def ensureResponse(https,method,path,auth_)
 	}
 end
 
-def login(wwwAuth,host=nil,forceCredential=false)
+def login(wwwAuth,host,forceCredential=false)
 	# puts wwwAuth
 	parser = Mechanize::HTTP::WWWAuthenticateParser.new.parse(wwwAuth)[0]
-	uri = URI.parse(parser.params['realm'])
-	credentialHost = host || uri.host
-	authhttps = Net::HTTP.new(uri.host,uri.port)
-	authhttps.use_ssl = true
-	authhttps.verify_mode = OpenSSL::SSL::VERIFY_PEER
-	authhttps.start{
-		resp = authhttps.get(
-			# '%s?scope=repository:%s:pull&service=%s'%[uri.path,repository,parser.params['service']]
-			'%s?scope=%s&service=%s'%[uri.path,parser.params['scope'],parser.params['service']]
-		)
-		if forceCredential || resp.code.to_i == 401 || resp.code.to_i == 403
-			basic = getCredential(credentialHost)
-			if basic
-				account = Base64.decode64(basic).split(':')[0]
-				resp = authhttps.get(
-					'%s?account=%s&scope=%s&service=%s'%[uri.path,account,parser.params['scope'],parser.params['service']],
-					'Authorization' => 'Basic '+basic
-				)
-				if resp.code.to_i == 401
-					raise 'Credential is wrong (used "%s"). Please relogin to %s.'%[account,credentialHost]
-				end
-			else
-				raise '`docker login %s` is required.'%credentialHost
-			end
+	if parser.scheme.downcase == 'basic'
+		basic = getCredential(host)
+		if basic
+			return {'Authorization' => 'Basic '+basic}
+		else
+			raise '`docker login %s` is required.'%host
 		end
-		token = JSON.parse(resp.body)['token']
-		return {'Authorization' => 'Bearer '+token}
-	}
+	elsif parser.scheme.downcase == 'bearer'
+		uri = URI.parse(parser.params['realm'])
+		credentialHost = host  # || uri.host
+		authhttps = Net::HTTP.new(uri.host,uri.port)
+		authhttps.use_ssl = true
+		authhttps.verify_mode = OpenSSL::SSL::VERIFY_PEER
+		authhttps.start{
+			resp = authhttps.get(
+				# '%s?scope=repository:%s:pull&service=%s'%[uri.path,repository,parser.params['service']]
+				'%s?scope=%s&service=%s'%[uri.path,parser.params['scope'],parser.params['service']]
+			)
+			if forceCredential || resp.code.to_i == 401 || resp.code.to_i == 403
+				basic = getCredential(credentialHost)
+				if basic
+					account = Base64.decode64(basic).split(':')[0]
+					resp = authhttps.get(
+						'%s?account=%s&scope=%s&service=%s'%[uri.path,account,parser.params['scope'],parser.params['service']],
+						'Authorization' => 'Basic '+basic
+					)
+					if resp.code.to_i == 401
+						raise 'Credential is wrong (used "%s"). Please relogin to %s.'%[account,credentialHost]
+					end
+				else
+					raise '`docker login %s` is required.'%credentialHost
+				end
+			end
+			token = JSON.parse(resp.body)['token']
+			return {'Authorization' => 'Bearer '+token}
+		}
+	else
+		raise 'Unknown realm scheme %s'%parser.scheme
+	end
 end
 
 def ensureManifest(https, host, path, headers={}, auth=nil)

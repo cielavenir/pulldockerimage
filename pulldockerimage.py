@@ -99,31 +99,41 @@ def ensureResponse(https,method,path,auth_):
                 return
             resp.read()
 
-def login(wwwAuth,host=None,forceCredential=False):
+def login(wwwAuth,host,forceCredential=False):
     authresp = wwwAuth
     # print(wwwAuth)
-    realm = parse_keqv_list(parse_http_list(authresp[authresp.index(' ')+1:]))
-    realmurl = urlparse(realm['realm'])
-    credentialHost = host if host is not None else realmurl.netloc
-    with closing(httplib.HTTPSConnection(realmurl.netloc)) as authhttps:
-        #authhttps.request('GET','%s?scope=repository:%s:pull&service=%s'%(realmurl.path,repository,realm['service']),None)
-        authhttps.request('GET','%s?scope=%s&service=%s'%(realmurl.path,realm['scope'],realm['service']),None)
-        resp = authhttps.getresponse()
-        if forceCredential or resp.status == 401 or resp.status == 403:
-            resp.read()
-            basic = getCredential(credentialHost)
-            if basic:
-                account = base64.b64decode(basic).decode('utf-8').split(':')[0]
-                authhttps.request('GET','%s?account=%s&scope=%s&service=%s'%(realmurl.path,account,realm['scope'],realm['service']),None,{'Authorization':'Basic '+basic})
-                resp = authhttps.getresponse()
-                if resp.status == 401:
-                    raise Exception('Credential is wrong (used "%s"). Please relogin to %s.'%(account,credentialHost))
-            else:
-                raise Exception('`docker login %s` is required.'%(credentialHost))
-        if int(resp.status)//100 == 5:
-            raise Exception('failed to get login token (status %d): %s'%(int(resp.status), resp.read()))
-        token = json.load(resp)['token']
-        return {'Authorization':'Bearer '+token}
+    scheme = authresp[:authresp.index(' ')]
+    if scheme.lower() == 'basic':
+        basic = getCredential(host)
+        if basic:
+            return {'Authorization':'Basic '+basic}
+        else:
+            raise Exception('`docker login %s` is required.'%(credentialHost))
+    elif scheme.lower() == 'bearer':
+        realm = parse_keqv_list(parse_http_list(authresp[authresp.index(' ')+1:]))
+        realmurl = urlparse(realm['realm'])
+        credentialHost = host   # if host is not None else realmurl.netloc
+        with closing(httplib.HTTPSConnection(realmurl.netloc)) as authhttps:
+            #authhttps.request('GET','%s?scope=repository:%s:pull&service=%s'%(realmurl.path,repository,realm['service']),None)
+            authhttps.request('GET','%s?scope=%s&service=%s'%(realmurl.path,realm['scope'],realm['service']),None)
+            resp = authhttps.getresponse()
+            if forceCredential or resp.status == 401 or resp.status == 403:
+                resp.read()
+                basic = getCredential(credentialHost)
+                if basic:
+                    account = base64.b64decode(basic).decode('utf-8').split(':')[0]
+                    authhttps.request('GET','%s?account=%s&scope=%s&service=%s'%(realmurl.path,account,realm['scope'],realm['service']),None,{'Authorization':'Basic '+basic})
+                    resp = authhttps.getresponse()
+                    if resp.status == 401:
+                        raise Exception('Credential is wrong (used "%s"). Please relogin to %s.'%(account,credentialHost))
+                else:
+                    raise Exception('`docker login %s` is required.'%(credentialHost))
+            if int(resp.status)//100 == 5:
+                raise Exception('failed to get login token (status %d): %s'%(int(resp.status), resp.read()))
+            token = json.load(resp)['token']
+            return {'Authorization':'Bearer '+token}
+    else:
+        raise Exception('Unknown realm scheme %s'%scheme)
 
 def ensureManifest(https, host, path, headers={}, auth=None):
     if auth is None:
