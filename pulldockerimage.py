@@ -76,7 +76,7 @@ def makeTarInfo(**kwargs):
     return info
 
 @contextmanager
-def ensureResponse(https,method,path,auth_):
+def ensureResponse(https, method, path, auth_):
     # blobs can be stored in CDN, so need to iterate while 30x is returned.
     # method should be GET or HEAD.
     # path should be /v2/.../blobs/ endpoint.
@@ -104,7 +104,7 @@ def ensureResponse(https,method,path,auth_):
                 return
             resp.read()
 
-def login(wwwAuth,host,forceCredential=False):
+def login(wwwAuth, host, forceCredential=False):
     authresp = wwwAuth
     # print(wwwAuth)
     scheme = authresp[:authresp.index(' ')]
@@ -141,21 +141,21 @@ def login(wwwAuth,host,forceCredential=False):
     else:
         raise Exception('Unknown realm scheme %s'%scheme)
 
-def ensureManifest(https, path, headers={}, auth=None):
+def ensureManifest(https, method, path, headers={}, auth=None):
     if auth is None:
         auth = {}
-    https.request('GET',path,None,dict(auth,**headers))
+    https.request(method,path,None,dict(auth,**headers))
     resp = https.getresponse()
     if resp.status == 401:
         resp.read()
         auth = login(resp.getheader('www-authenticate'),https.host,False)
-        https.request('GET',path,None,dict(auth,**headers))
+        https.request(method,path,None,dict(auth,**headers))
         resp = https.getresponse()
         if resp.status == 401:
             sys.stderr.write('auth failed; probably got token for public image, forcing login to enter private image mode.\n')
             resp.read()
             auth = login(resp.getheader('www-authenticate'),https.host,True)
-            https.request('GET',path,None,dict(auth,**headers))
+            https.request(method,path,None,dict(auth,**headers))
             resp = https.getresponse()
     # if resp.status == 404:
     #     resp.read()
@@ -184,7 +184,7 @@ def pullDockerImage(arg,fout,platform=None,verbose=False,listing=False,touch=Fal
             perPage = 100
             lastRepository = ''
             while True:
-                auth, resp = ensureManifest(https, '/v2/_catalog?last=%s&n=%d' % (lastRepository, perPage), headers={}, auth=auth)
+                auth, resp = ensureManifest(https, 'GET', '/v2/_catalog?last=%s&n=%d' % (lastRepository, perPage), headers={}, auth=auth)
                 repositories = json.load(resp)['repositories']
                 for repository in sorted(repositories):
                     fout.write(('%s\n'%repository).encode('utf-8'))
@@ -195,7 +195,7 @@ def pullDockerImage(arg,fout,platform=None,verbose=False,listing=False,touch=Fal
 
         if tag is None or listing:
             option_tag = tag
-            auth, resp = ensureManifest(https, '/v2/%s/tags/list'%repository)
+            auth, resp = ensureManifest(https, 'GET', '/v2/%s/tags/list'%repository)
             for tag in sorted(json.load(resp)['tags']):
                 if option_tag is None:
                     verbose = False
@@ -239,14 +239,14 @@ def pullDockerImage(arg,fout,platform=None,verbose=False,listing=False,touch=Fal
                     fout.write(('%s\n'%tag).encode('utf-8'))
             return 0
 
-        auth, resp = ensureManifest(https, '/v2/%s/manifests/%s'%(repository,tag), headers={'Accept':IMAGE_MANIFEST_TYPE})
+        auth, resp = ensureManifest(https, 'GET', '/v2/%s/manifests/%s'%(repository,tag), headers={'Accept':IMAGE_MANIFEST_TYPE})
         manifestv2Json = resp.read()
         manifestv2 = json.loads(manifestv2Json)
         repodigest = resp.getheader('docker-content-digest')
         if resp.getheader('content-type') in ['application/vnd.docker.distribution.manifest.list.v2+json', 'application/vnd.oci.image.index.v1+json']:
             for manifest in manifestv2['manifests']:
                 if platform == '%s/%s' % (manifest['platform'].get('os'), manifest['platform'].get('architecture')):
-                    auth, resp = ensureManifest(https, '/v2/%s/manifests/%s'%(repository,manifest['digest']), headers={'Accept':'application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json'})
+                    auth, resp = ensureManifest(https, 'GET', '/v2/%s/manifests/%s'%(repository,manifest['digest']), headers={'Accept':'application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json'})
                     manifestv2Json = resp.read()
                     manifestv2 = json.loads(manifestv2Json)
                     break

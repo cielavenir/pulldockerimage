@@ -85,7 +85,7 @@ def getCredential(host, b64=true)
 	end
 end
 
-def ensureResponse(https,method,path,auth_)
+def ensureResponse(https, method, path, auth_)
 	# blobs can be stored in CDN, so need to iterate while 30x is returned.
 	# method should be GET or HEAD.
 	# path should be /v2/.../blobs/ endpoint.
@@ -124,7 +124,7 @@ def ensureResponse(https,method,path,auth_)
 	}
 end
 
-def login(wwwAuth,host,forceCredential=false)
+def login(wwwAuth, host, forceCredential=false)
 	# puts wwwAuth
 	parser = Mechanize::HTTP::WWWAuthenticateParser.new.parse(wwwAuth)[0]
 	if parser.scheme.downcase == 'basic'
@@ -169,18 +169,18 @@ def login(wwwAuth,host,forceCredential=false)
 	end
 end
 
-def ensureManifest(https, path, headers={}, auth=nil)
+def ensureManifest(https, method, path, headers={}, auth=nil)
 	if !auth
 		auth = {}
 	end
-	resp = https.get(path,auth.merge(headers))
+	resp = https.request(Net::HTTP.const_get(method.capitalize).new(path, auth.merge(headers)))
 	if resp.code.to_i == 401
 		auth = login(resp['www-authenticate'],https.address,false)
-		resp = https.get(path,auth.merge(headers))
+		resp = https.request(Net::HTTP.const_get(method.capitalize).new(path, auth.merge(headers)))
 		if resp.code.to_i == 401
 			STDERR.puts 'auth failed; probably got token for public image, forcing login to enter private image mode.'
 			auth = login(resp['www-authenticate'],https.address,true)
-			resp = https.get(path,auth.merge(headers))
+			resp = https.request(Net::HTTP.const_get(method.capitalize).new(path, auth.merge(headers)))
 		end
 	end
 	# if resp.code.to_i == 404
@@ -223,7 +223,7 @@ def pullDockerImage(arg,fout,kwargs)
 			perPage = 100
 			lastRepository = ''
 			loop {
-				auth, resp = ensureManifest(https, '/v2/_catalog?last=%s&n=%d' % [lastRepository, perPage], {}, auth)
+				auth, resp = ensureManifest(https, 'GET', '/v2/_catalog?last=%s&n=%d' % [lastRepository, perPage], {}, auth)
 				repositories = JSON.parse(resp.body)['repositories']
 				repositories.sort.each{|repository|
 					fout.puts repository
@@ -236,7 +236,7 @@ def pullDockerImage(arg,fout,kwargs)
 
 		if !tag || listing
 			option_tag = tag
-			auth, resp = ensureManifest(https, '/v2/%s/tags/list'%repository)
+			auth, resp = ensureManifest(https, 'GET', '/v2/%s/tags/list'%repository)
 			tags = JSON.parse(resp.body)['tags'].sort
 			tags.each{|tag|
 				if !option_tag
@@ -304,7 +304,7 @@ def pullDockerImage(arg,fout,kwargs)
 			return 0
 		end
 
-		auth, resp = ensureManifest(https, '/v2/%s/manifests/%s'%[repository,tag], {
+		auth, resp = ensureManifest(https, 'GET', '/v2/%s/manifests/%s'%[repository,tag], {
 			'Accept' => IMAGE_MANIFEST_TYPE
 		})
 		manifestv2Json = resp.body
@@ -313,7 +313,7 @@ def pullDockerImage(arg,fout,kwargs)
 		if ['application/vnd.docker.distribution.manifest.list.v2+json', 'application/vnd.oci.image.index.v1+json'].include?(resp['content-type'])
 			if manifestv2['manifests'].each{|manifest|
 				if platform == '%s/%s' % [manifest['platform']['os'], manifest['platform']['architecture']]
-					auth, resp = ensureManifest(https, '/v2/%s/manifests/%s'%[repository,manifest['digest']], {
+					auth, resp = ensureManifest(https, 'GET', '/v2/%s/manifests/%s'%[repository,manifest['digest']], {
 						'Accept' => 'application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json'
 					})
 					manifestv2Json = resp.body
