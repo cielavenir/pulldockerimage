@@ -141,7 +141,7 @@ def login(wwwAuth, host, forceCredential=False):
     else:
         raise Exception('Unknown realm scheme %s'%scheme)
 
-def ensureAuth(https, method, path, *, body=None, headers={}):
+def ensureAuth(https, method, path, body=None, headers={}):
     # The initial pull scope needs to acquire auth.
     # Also, actions requiring to upgrade the scope (push or delete) should use this again.
     # Note that headers must not include auth.
@@ -160,12 +160,8 @@ def ensureAuth(https, method, path, *, body=None, headers={}):
             auth = login(wwwAuth,https.host,True)
             https.request(method,path,body,dict(auth,**headers))
             resp = https.getresponse()
-    # if resp.status == 404:
-    #     resp.read()
-    #     raise Exception('the specified repository (%s) does not exist on host (%s).'%(repository,host))
     if int(resp.status)//100 != 2:
-        resp.read()
-        raise Exception('failed to retrieve manifest (%d).'%resp.status)
+        raise Exception('%s %s failed (%d): %r'%(method,path,resp.status,resp.read()))
     return auth, resp
 
 def pullDockerImage(arg,fout,platform=None,verbose=False,listing=False,touch=False,delete=False,check=False):
@@ -250,7 +246,10 @@ def pullDockerImage(arg,fout,platform=None,verbose=False,listing=False,touch=Fal
         if resp.getheader('content-type') in ['application/vnd.docker.distribution.manifest.list.v2+json', 'application/vnd.oci.image.index.v1+json']:
             for manifest in manifestv2['manifests']:
                 if platform == '%s/%s' % (manifest['platform'].get('os'), manifest['platform'].get('architecture')):
-                    auth, resp = ensureAuth(https, 'GET', '/v2/%s/manifests/%s'%(repository,manifest['digest']), body=None, headers={'Accept':'application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json'})
+                    https.request('GET','/v2/%s/manifests/%s'%(repository,manifest['digest']),None,dict(auth,Accept='application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json'))
+                    resp = https.getresponse()
+                    if int(resp.status)//100 != 2:
+                        raise Exception('GET /v2/%s/manifests/%s failed (%d): %r'%(repository,manifest['digest'],resp.status,resp.read()))
                     manifestv2Json = resp.read()
                     manifestv2 = json.loads(manifestv2Json)
                     break
@@ -263,16 +262,12 @@ def pullDockerImage(arg,fout,platform=None,verbose=False,listing=False,touch=Fal
         if delete:
             fout.write(('DELETE /v2/%s/manifests/%s\n'%(repository,repodigest)).encode('utf-8'))
             auth, resp = ensureAuth(https, 'DELETE', '/v2/%s/manifests/%s'%(repository,repodigest), body=None, headers={'Accept': IMAGE_MANIFEST_TYPE})
-            if int(resp.status)//100 != 2:
-                raise Exception('failed delete manifest (%r)' % resp.read())
             fout.write(resp.read())
             fout.write(b'\n')
             return 0
         if touch:
             fout.write(('PUT /v2/%s/manifests/%s\n'%(repository,tag)).encode('utf-8'))
             auth, resp = ensureAuth(https, 'PUT', '/v2/%s/manifests/%s'%(repository,tag), body=manifestv2Json, headers={'Content-Type': mediaType, 'Accept': IMAGE_MANIFEST_TYPE})
-            if int(resp.status)//100 != 2:
-                raise Exception('failed touch manifest (%r)' % resp.read())
             fout.write(resp.read())
             fout.write(b'\n')
             return 0

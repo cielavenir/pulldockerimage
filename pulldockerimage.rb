@@ -185,11 +185,8 @@ def ensureAuth(https, method, path, body=nil, headers={})
 			resp = https.request(Net::HTTP.const_get(method.capitalize).new(path, auth.merge(headers)), body)
 		end
 	end
-	# if resp.code.to_i == 404
-	# 	raise 'the specified repository (%s) does not exist on host (%s).'%[repository,host]
-	# end
 	if resp.code.to_i/100 != 2
-		raise 'failed to retrieve manifest (%d).'%resp.code.to_i
+		raise '%s %s failed (%d): %s'%[method,path,resp.code.to_i,resp.body]
 	end
 	return auth, resp
 end
@@ -315,9 +312,12 @@ def pullDockerImage(arg,fout,kwargs)
 		if ['application/vnd.docker.distribution.manifest.list.v2+json', 'application/vnd.oci.image.index.v1+json'].include?(resp['content-type'])
 			if manifestv2['manifests'].each{|manifest|
 				if platform == '%s/%s' % [manifest['platform']['os'], manifest['platform']['architecture']]
-					auth, resp = ensureAuth(https, 'GET', '/v2/%s/manifests/%s'%[repository,manifest['digest']], nil, {
+					resp = https.get('/v2/%s/manifests/%s'%[repository,manifest['digest']], auth.merge({
 						'Accept' => 'application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json'
-					})
+					}))
+					if resp.code.to_i/100 != 2
+						raise 'GET /v2/%s/manifests/%s failed (%d): %s'%[repository,manifest['digest'],resp.code.to_i,resp.body]
+					end
 					manifestv2Json = resp.body
 					manifestv2 = JSON.parse(manifestv2Json)
 					break
@@ -336,9 +336,6 @@ def pullDockerImage(arg,fout,kwargs)
 			auth, resp = ensureAuth(https, 'DELETE', '/v2/%s/manifests/%s'%[repository,repodigest], nil, {
 				'Accept' => IMAGE_MANIFEST_TYPE
 			})
-			if resp.code.to_i/100 != 2
-				raise 'failed delete manifest (%s)' % resp.body
-			end
 			fout.puts resp.body
 			return 0
 		end
@@ -348,9 +345,6 @@ def pullDockerImage(arg,fout,kwargs)
 				'Content-Type' => mediaType,
 				'Accept' => IMAGE_MANIFEST_TYPE
 			})
-			if resp.code.to_i/100 != 2
-				raise 'failed touch manifest (%s)' % resp.body
-			end
 			fout.puts resp.body
 			return 0
 		end
