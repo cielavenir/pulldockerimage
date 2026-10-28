@@ -144,18 +144,20 @@ def login(wwwAuth, host, forceCredential=False):
 def ensureAuth(https, method, path, *, body=None, headers={}):
     # The initial pull scope needs to acquire auth.
     # Also, actions requiring to upgrade the scope (push or delete) should use this again.
+    # Note that headers must not include auth.
     auth = {}
     https.request(method,path,body,dict(auth,**headers))
     resp = https.getresponse()
+    wwwAuth = resp.getheader('www-authenticate')
     if resp.status == 401:
         resp.read()
-        auth = login(resp.getheader('www-authenticate'),https.host,False)
+        auth = login(wwwAuth,https.host,False)
         https.request(method,path,body,dict(auth,**headers))
         resp = https.getresponse()
         if resp.status == 401:
             sys.stderr.write('auth failed; probably got token for public image, forcing login to enter private image mode.\n')
             resp.read()
-            auth = login(resp.getheader('www-authenticate'),https.host,True)
+            auth = login(wwwAuth,https.host,True)
             https.request(method,path,body,dict(auth,**headers))
             resp = https.getresponse()
     # if resp.status == 404:
@@ -241,7 +243,7 @@ def pullDockerImage(arg,fout,platform=None,verbose=False,listing=False,touch=Fal
                     fout.write(('%s\n'%tag).encode('utf-8'))
             return 0
 
-        auth, resp = ensureAuth(https, 'GET', '/v2/%s/manifests/%s'%(repository,tag), body=None, headers={'Accept':IMAGE_MANIFEST_TYPE})
+        auth, resp = ensureAuth(https, 'GET', '/v2/%s/manifests/%s'%(repository,tag), body=None, headers={'Accept': IMAGE_MANIFEST_TYPE})
         manifestv2Json = resp.read()
         manifestv2 = json.loads(manifestv2Json)
         repodigest = resp.getheader('docker-content-digest')
@@ -260,13 +262,7 @@ def pullDockerImage(arg,fout,platform=None,verbose=False,listing=False,touch=Fal
         mediaType = manifestv2.get('mediaType', 'application/vnd.docker.distribution.manifest.v2+json')
         if delete:
             fout.write(('DELETE /v2/%s/manifests/%s\n'%(repository,repodigest)).encode('utf-8'))
-            https.request('DELETE','/v2/%s/manifests/%s'%(repository,repodigest),None,dict(auth,Accept=IMAGE_MANIFEST_TYPE))
-            resp = https.getresponse()
-            if resp.status == 401:
-                resp.read()
-                auth = login(resp.getheader('www-authenticate'),host,True)
-                https.request('DELETE','/v2/%s/manifests/%s'%(repository,repodigest),None,dict(auth,Accept=IMAGE_MANIFEST_TYPE))
-                resp = https.getresponse()
+            auth, resp = ensureAuth(https, 'DELETE', '/v2/%s/manifests/%s'%(repository,repodigest), body=None, headers={'Accept': IMAGE_MANIFEST_TYPE})
             if int(resp.status)//100 != 2:
                 raise Exception('failed delete manifest (%r)' % resp.read())
             fout.write(resp.read())
@@ -274,13 +270,7 @@ def pullDockerImage(arg,fout,platform=None,verbose=False,listing=False,touch=Fal
             return 0
         if touch:
             fout.write(('PUT /v2/%s/manifests/%s\n'%(repository,tag)).encode('utf-8'))
-            https.request('PUT','/v2/%s/manifests/%s'%(repository,tag),manifestv2Json,dict(auth,**{'Content-Type':mediaType,'Accept':IMAGE_MANIFEST_TYPE}))
-            resp = https.getresponse()
-            if resp.status == 401:
-                resp.read()
-                auth = login(resp.getheader('www-authenticate'),host,True)
-                https.request('PUT','/v2/%s/manifests/%s'%(repository,tag),manifestv2Json,dict(auth,**{'Content-Type':mediaType,'Accept':IMAGE_MANIFEST_TYPE}))
-                resp = https.getresponse()
+            auth, resp = ensureAuth(https, 'PUT', '/v2/%s/manifests/%s'%(repository,tag), body=manifestv2Json, headers={'Content-Type': mediaType, 'Accept': IMAGE_MANIFEST_TYPE})
             if int(resp.status)//100 != 2:
                 raise Exception('failed touch manifest (%r)' % resp.read())
             fout.write(resp.read())

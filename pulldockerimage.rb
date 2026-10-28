@@ -172,14 +172,16 @@ end
 def ensureAuth(https, method, path, body=nil, headers={})
 	# The initial pull scope needs to acquire auth.
 	# Also, actions requiring to upgrade the scope (push or delete) should use this again.
+	# Note that headers must not include auth.
 	auth = {}
 	resp = https.request(Net::HTTP.const_get(method.capitalize).new(path, auth.merge(headers)), body)
+	wwwAuth = resp['www-authenticate']
 	if resp.code.to_i == 401
-		auth = login(resp['www-authenticate'],https.address,false)
+		auth = login(wwwAuth,https.address,false)
 		resp = https.request(Net::HTTP.const_get(method.capitalize).new(path, auth.merge(headers)), body)
 		if resp.code.to_i == 401
 			STDERR.puts 'auth failed; probably got token for public image, forcing login to enter private image mode.'
-			auth = login(resp['www-authenticate'],https.address,true)
+			auth = login(wwwAuth,https.address,true)
 			resp = https.request(Net::HTTP.const_get(method.capitalize).new(path, auth.merge(headers)), body)
 		end
 	end
@@ -331,21 +333,9 @@ def pullDockerImage(arg,fout,kwargs)
 		mediaType = manifestv2['mediaType'] || 'application/vnd.docker.distribution.manifest.v2+json'
 		if delete
 			fout.puts 'DELETE /v2/%s/manifests/%s'%[repository,repodigest]
-			resp = https.delete(
-				'/v2/%s/manifests/%s'%[repository,repodigest],
-				auth.merge({
-					'Accept' => IMAGE_MANIFEST_TYPE
-				})
-			)
-			if resp.code.to_i == 401
-				auth = login(resp['www-authenticate'],host,true)
-				resp = https.delete(
-					'/v2/%s/manifests/%s'%[repository,repodigest],
-					auth.merge({
-						'Accept' => IMAGE_MANIFEST_TYPE
-					})
-				)
-			end
+			auth, resp = ensureAuth(https, 'DELETE', '/v2/%s/manifests/%s'%[repository,repodigest], nil, {
+				'Accept' => IMAGE_MANIFEST_TYPE
+			})
 			if resp.code.to_i/100 != 2
 				raise 'failed delete manifest (%s)' % resp.body
 			end
@@ -354,25 +344,10 @@ def pullDockerImage(arg,fout,kwargs)
 		end
 		if touch
 			fout.puts 'PUT /v2/%s/manifests/%s'%[repository,tag]
-			resp = https.put(
-				'/v2/%s/manifests/%s'%[repository,tag],
-				manifestv2Json,
-				auth.merge({
-					'Content-Type' => mediaType,
-					'Accept' => IMAGE_MANIFEST_TYPE
-				})
-			)
-			if resp.code.to_i == 401
-				auth = login(resp['www-authenticate'],host,true)
-				resp = https.put(
-					'/v2/%s/manifests/%s'%[repository,tag],
-					manifestv2Json,
-					auth.merge({
-						'Content-Type' => mediaType,
-						'Accept' => IMAGE_MANIFEST_TYPE
-					})
-				)
-			end
+			auth, resp = ensureAuth(https, 'PUT', '/v2/%s/manifests/%s'%[repository,tag], manifestv2Json, {
+				'Content-Type' => mediaType,
+				'Accept' => IMAGE_MANIFEST_TYPE
+			})
 			if resp.code.to_i/100 != 2
 				raise 'failed touch manifest (%s)' % resp.body
 			end
