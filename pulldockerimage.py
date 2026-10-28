@@ -141,23 +141,23 @@ def login(wwwAuth, host, forceCredential=False):
     else:
         raise Exception('Unknown realm scheme %s'%scheme)
 
-def ensureAuth(https, method, path, headers={}, auth=None):
+def ensureAuth(https, method, path, *, body=None, headers={}, auth=None):
     # The initial pull scope needs to acquire auth.
     # Also, actions requiring to upgrade the scope (push or delete) should use this again.
     if auth is None:
         auth = {}
-    https.request(method,path,None,dict(auth,**headers))
+    https.request(method,path,body,dict(auth,**headers))
     resp = https.getresponse()
     if resp.status == 401:
         resp.read()
         auth = login(resp.getheader('www-authenticate'),https.host,False)
-        https.request(method,path,None,dict(auth,**headers))
+        https.request(method,path,body,dict(auth,**headers))
         resp = https.getresponse()
         if resp.status == 401:
             sys.stderr.write('auth failed; probably got token for public image, forcing login to enter private image mode.\n')
             resp.read()
             auth = login(resp.getheader('www-authenticate'),https.host,True)
-            https.request(method,path,None,dict(auth,**headers))
+            https.request(method,path,body,dict(auth,**headers))
             resp = https.getresponse()
     # if resp.status == 404:
     #     resp.read()
@@ -186,7 +186,7 @@ def pullDockerImage(arg,fout,platform=None,verbose=False,listing=False,touch=Fal
             perPage = 100
             lastRepository = ''
             while True:
-                auth, resp = ensureAuth(https, 'GET', '/v2/_catalog?last=%s&n=%d' % (lastRepository, perPage), headers={}, auth=auth)
+                auth, resp = ensureAuth(https, 'GET', '/v2/_catalog?last=%s&n=%d' % (lastRepository, perPage), body=None, headers={}, auth=auth)
                 repositories = json.load(resp)['repositories']
                 for repository in sorted(repositories):
                     fout.write(('%s\n'%repository).encode('utf-8'))
@@ -241,14 +241,14 @@ def pullDockerImage(arg,fout,platform=None,verbose=False,listing=False,touch=Fal
                     fout.write(('%s\n'%tag).encode('utf-8'))
             return 0
 
-        auth, resp = ensureAuth(https, 'GET', '/v2/%s/manifests/%s'%(repository,tag), headers={'Accept':IMAGE_MANIFEST_TYPE})
+        auth, resp = ensureAuth(https, 'GET', '/v2/%s/manifests/%s'%(repository,tag), body=None, headers={'Accept':IMAGE_MANIFEST_TYPE})
         manifestv2Json = resp.read()
         manifestv2 = json.loads(manifestv2Json)
         repodigest = resp.getheader('docker-content-digest')
         if resp.getheader('content-type') in ['application/vnd.docker.distribution.manifest.list.v2+json', 'application/vnd.oci.image.index.v1+json']:
             for manifest in manifestv2['manifests']:
                 if platform == '%s/%s' % (manifest['platform'].get('os'), manifest['platform'].get('architecture')):
-                    auth, resp = ensureAuth(https, 'GET', '/v2/%s/manifests/%s'%(repository,manifest['digest']), headers={'Accept':'application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json'})
+                    auth, resp = ensureAuth(https, 'GET', '/v2/%s/manifests/%s'%(repository,manifest['digest']), body=None, headers={'Accept':'application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json'})
                     manifestv2Json = resp.read()
                     manifestv2 = json.loads(manifestv2Json)
                     break
