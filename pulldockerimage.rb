@@ -169,12 +169,10 @@ def login(wwwAuth, host, forceCredential=false)
 	end
 end
 
-def ensureAuth(https, method, path, body=nil, headers={}, auth=nil)
+def ensureAuth(https, method, path, body=nil, headers={})
 	# The initial pull scope needs to acquire auth.
 	# Also, actions requiring to upgrade the scope (push or delete) should use this again.
-	if !auth
-		auth = {}
-	end
+	auth = {}
 	resp = https.request(Net::HTTP.const_get(method.capitalize).new(path, auth.merge(headers)), body)
 	if resp.code.to_i == 401
 		auth = login(resp['www-authenticate'],https.address,false)
@@ -221,17 +219,17 @@ def pullDockerImage(arg,fout,kwargs)
 	https.verify_mode = OpenSSL::SSL::VERIFY_PEER
 	https.start{
 		if !repository || repository == '' || repository == '/'
-			auth = {}
 			perPage = 100
 			lastRepository = ''
+			auth, resp = ensureAuth(https, 'GET', '/v2/_catalog?n=%d' % [perPage], nil, {})
 			loop {
-				auth, resp = ensureAuth(https, 'GET', '/v2/_catalog?last=%s&n=%d' % [lastRepository, perPage], nil, {}, auth)
 				repositories = JSON.parse(resp.body)['repositories']
 				repositories.sort.each{|repository|
 					fout.puts repository
 				}
 				break if repositories.size < perPage
 				lastRepository = repositories[-1]
+				resp = https.get('/v2/_catalog?last=%s&n=%d' % [lastRepository, perPage], auth)
 			}
 			return 0
 		end

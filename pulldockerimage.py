@@ -141,11 +141,10 @@ def login(wwwAuth, host, forceCredential=False):
     else:
         raise Exception('Unknown realm scheme %s'%scheme)
 
-def ensureAuth(https, method, path, *, body=None, headers={}, auth=None):
+def ensureAuth(https, method, path, *, body=None, headers={}):
     # The initial pull scope needs to acquire auth.
     # Also, actions requiring to upgrade the scope (push or delete) should use this again.
-    if auth is None:
-        auth = {}
+    auth = {}
     https.request(method,path,body,dict(auth,**headers))
     resp = https.getresponse()
     if resp.status == 401:
@@ -182,17 +181,18 @@ def pullDockerImage(arg,fout,platform=None,verbose=False,listing=False,touch=Fal
 
     with closing(httplib.HTTPSConnection(host)) as https:
         if repository == '' or repository == '/':
-            auth = {}
             perPage = 100
             lastRepository = ''
+            auth, resp = ensureAuth(https, 'GET', '/v2/_catalog?n=%d' % perPage, body=None, headers={})
             while True:
-                auth, resp = ensureAuth(https, 'GET', '/v2/_catalog?last=%s&n=%d' % (lastRepository, perPage), body=None, headers={}, auth=auth)
                 repositories = json.load(resp)['repositories']
                 for repository in sorted(repositories):
                     fout.write(('%s\n'%repository).encode('utf-8'))
                 if len(repositories) < perPage:
                     break
                 lastRepository = repositories[-1]
+                https.request('GET','/v2/_catalog?last=%s&n=%d' % (lastRepository, perPage),None,auth)
+                resp = https.getresponse()
             return 0
 
         if tag is None or listing:
