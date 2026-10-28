@@ -30,7 +30,7 @@ If credsStore is not used, .docker/config.json should look like this.
 
 {
         "auths": {
-                "auth.docker.io": {
+                "https://index.docker.io/v1/": {
                         "auth": base64(username:password)
                 }
         }

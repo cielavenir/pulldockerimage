@@ -47,7 +47,25 @@ end
 
 IMAGE_MANIFEST_TYPE = 'application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json'
 
+def getRegistryHost(host)
+	# docker.io is not a registry endpoint (it redirects to www.docker.com).
+	if host == 'docker.io'
+		return 'registry-1.docker.io'
+	else
+		return host
+	end
+end
+
+def getDockerConfigKey(host)
+	if ['docker.io', 'registry-1.docker.io', 'index.docker.io'].include?(host)
+		return 'https://index.docker.io/v1/'
+	else
+		return host
+	end
+end
+
 def getCredential(host, b64=true)
+	host = getDockerConfigKey(host)
 	fname = ENV['HOME']+'/.docker/config.json'
 	return nil if !File.file?(fname)
 	jso = JSON.parse(File.read(fname))
@@ -213,7 +231,7 @@ def pullDockerImage(arg,fout,kwargs)
 	repository = repository[host.size+1..-1]
 	specified_by_digest = tag && tag.index(':')
 
-	https = Net::HTTP.new(host,443)
+	https = Net::HTTP.new(getRegistryHost(host),443)
 	https.use_ssl = true
 	https.verify_mode = OpenSSL::SSL::VERIFY_PEER
 	https.start{
@@ -461,7 +479,7 @@ If credsStore is not used, .docker/config.json should look like this.
 
 {
         "auths": {
-                "index.docker.io": {
+                "https://index.docker.io/v1/": {
                         "auth": base64(username:password)
                 }
         }

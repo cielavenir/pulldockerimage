@@ -39,7 +39,21 @@ import json
 
 IMAGE_MANIFEST_TYPE = 'application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json'
 
+def getRegistryHost(host):
+    # docker.io is not a registry endpoint (it redirects to www.docker.com).
+    if host == 'docker.io':
+        return 'registry-1.docker.io'
+    else:
+        return host
+
+def getDockerConfigKey(host):
+    if host in ['docker.io', 'registry-1.docker.io', 'index.docker.io']:
+        return 'https://index.docker.io/v1/'
+    else:
+        return host
+
 def getCredential(host, b64=True):
+    host = getDockerConfigKey(host)
     fname = os.environ['HOME']+'/.docker/config.json'
     if os.path.isfile(fname):
         with open(fname) as f:
@@ -177,7 +191,7 @@ def pullDockerImage(arg,fout,platform=None,verbose=False,listing=False,touch=Fal
     repository = repository[len(host)+1:]
     specified_by_digest = tag is not None and tag.find(':')>=0
 
-    with closing(httplib.HTTPSConnection(host)) as https:
+    with closing(httplib.HTTPSConnection(getRegistryHost(host))) as https:
         if repository == '' or repository == '/':
             perPage = 100
             lastRepository = ''
@@ -363,7 +377,7 @@ If credsStore is not used, .docker/config.json should look like this.
 
 {
         "auths": {
-                "index.docker.io": {
+                "https://index.docker.io/v1/": {
                         "auth": base64(username:password)
                 }
         }
